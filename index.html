@@ -16,10 +16,12 @@
     <script>
         // 新增元件：雙模移動控制 (支援 WASD 與 VR 蘑菇頭)
         AFRAME.registerComponent('hybrid-locomotion', {
-            schema: { moveSpeed: { default: 0.05 } },
+            schema: { moveSpeed: { default: 0.05 }, turnSpeed: { default: 0.05 } },
             init: function () {
-                this.leftY = 0;
-                this.rightX = 0;
+                this.leftY = 0; // 左手前後
+                this.leftX = 0; // 左手左右
+                this.rightY = 0; // 右手前後
+                this.rightX = 0; // 右手左右
                 this.keys = {};
 
                 // 監聽鍵盤 WASD 按壓狀態
@@ -32,10 +34,16 @@
                     const rightHand = document.querySelector('#right-hand');
                     
                     if (leftHand) {
-                        leftHand.addEventListener('thumbstickmoved', (evt) => { this.leftY = evt.detail.y; });
+                        leftHand.addEventListener('thumbstickmoved', (evt) => { 
+                            this.leftX = evt.detail.x; 
+                            this.leftY = evt.detail.y; 
+                        });
                     }
                     if (rightHand) {
-                        rightHand.addEventListener('thumbstickmoved', (evt) => { this.rightX = evt.detail.x; });
+                        rightHand.addEventListener('thumbstickmoved', (evt) => { 
+                            this.rightX = evt.detail.x; 
+                            this.rightY = evt.detail.y;
+                        });
                     }
                 });
             },
@@ -43,21 +51,23 @@
                 const rig = this.el.object3D;
                 const camera = document.querySelector('a-camera').object3D;
 
-                // 取得輸入值 (VR優先，若無VR則讀取鍵盤)
-                let moveZ = this.leftY;
-                let moveX = this.rightX;
+                // --- 處理移動 (雙手搖桿皆可平移) ---
+                // 讀取輸入 (VR優先，若無VR則讀取鍵盤)
+                // 將兩手搖桿的輸入加總，讓兩隻手都能控制移動
+                let moveZ = this.leftY + this.rightY;
+                let moveX = this.leftX + this.rightX;
 
                 if (this.keys['KeyW']) moveZ -= 1;
                 if (this.keys['KeyS']) moveZ += 1;
                 if (this.keys['KeyA']) moveX -= 1;
                 if (this.keys['KeyD']) moveX += 1;
 
-                // 限制最大數值避免斜角移動過快
+                // 限制最大數值，避免雙手一起推時速度翻倍
                 moveZ = Math.max(-1, Math.min(1, moveZ));
                 moveX = Math.max(-1, Math.min(1, moveX));
 
                 // 處理前後移動 (Z軸)
-                if (Math.abs(moveZ) > 0.01) {
+                if (Math.abs(moveZ) > 0.05) {
                     const direction = new THREE.Vector3(0, 0, 1);
                     direction.applyQuaternion(camera.quaternion);
                     direction.y = 0; // 鎖定 Y 軸，避免飛天遁地
@@ -66,13 +76,17 @@
                 }
 
                 // 處理左右平移 (X軸)
-                if (Math.abs(moveX) > 0.01) {
+                if (Math.abs(moveX) > 0.05) {
                     const direction = new THREE.Vector3(1, 0, 0);
                     direction.applyQuaternion(camera.quaternion);
                     direction.y = 0;
                     direction.normalize();
                     rig.position.addScaledVector(direction, moveX * this.data.moveSpeed);
                 }
+
+                // 註：VR 頭盔的真實物理轉向 (左右看) 由 WebXR 原生處理。
+                // 如果需要「搖桿轉向 (Snap Turn)」，通常會指派給右手的 X 軸。
+                // 這裡目前依照要求，將左右手都設定為「平移」。
             }
         });
 
@@ -85,24 +99,22 @@
                 this.isHovered = false;
                 this.isFiring = false;
                 this.fireTimer = 0;
-                this.grabbedBy = null; 
+                this.grabbedBy = null; // 紀錄被哪隻手/設備抓取
                 
                 // 綁定 this 供事件監聽器使用
-                this.onGrabStartVR = this.onGrabStartVR.bind(this);
-                this.onGrabEndVR = this.onGrabEndVR.bind(this);
                 this.onHoverEnter = this.onHoverEnter.bind(this);
                 this.onHoverLeave = this.onHoverLeave.bind(this);
                 this.onKeyDown = this.onKeyDown.bind(this);
                 this.onMouseDown = this.onMouseDown.bind(this);
                 this.onMouseUp = this.onMouseUp.bind(this);
-                this.onTriggerDown = this.onTriggerDown.bind(this);
-                this.onTriggerUp = this.onTriggerUp.bind(this);
+                
+                // VR 專用事件
+                this.onVRGripDown = this.onVRGripDown.bind(this);
+                this.onVRGripUp = this.onVRGripUp.bind(this);
+                this.onVRTriggerDown = this.onVRTriggerDown.bind(this);
+                this.onVRTriggerUp = this.onVRTriggerUp.bind(this);
 
-                // --- 綁定 VR 抓取事件 ---
-                this.el.addEventListener('grab-start', this.onGrabStartVR);
-                this.el.addEventListener('grab-end', this.onGrabEndVR);
-
-                // --- 綁定電腦版滑鼠指向事件 ---
+                // --- 綁定電腦版與 VR 共用的 Hover 事件 ---
                 this.el.addEventListener('mouseenter', this.onHoverEnter);
                 this.el.addEventListener('mouseleave', this.onHoverLeave);
 
@@ -111,7 +123,7 @@
                 window.addEventListener('mousedown', this.onMouseDown);
                 window.addEventListener('mouseup', this.onMouseUp);
 
-                // 建立一個內部實體作為射線發射起點
+                // 建立一個內部實體作為射線發射起點 (給雷射筆發射子彈/火花用)
                 this.raycasterEntity = document.createElement('a-entity');
                 this.raycasterEntity.setAttribute('position', '0 0.25 0'); 
                 this.raycasterEntity.setAttribute('rotation', '90 0 0');
@@ -122,29 +134,96 @@
                 const rot = this.el.getAttribute('rotation');
                 this.originalPosition = { x: pos.x, y: pos.y, z: pos.z };
                 this.originalRotation = { x: rot.x, y: rot.y, z: rot.z };
+                
+                // 監聽 VR 控制器事件 (由外部在控制器創建時觸發，或直接綁定至場景)
+                this.el.sceneEl.addEventListener('loaded', () => {
+                    const leftHand = document.querySelector('#left-hand');
+                    const rightHand = document.querySelector('#right-hand');
+                    
+                    if(leftHand) {
+                        leftHand.addEventListener('gripdown', (e) => this.onVRGripDown(e, leftHand));
+                        leftHand.addEventListener('gripup', (e) => this.onVRGripUp(e, leftHand));
+                        leftHand.addEventListener('triggerdown', (e) => this.onVRTriggerDown(e, leftHand));
+                        leftHand.addEventListener('triggerup', (e) => this.onVRTriggerUp(e, leftHand));
+                    }
+                    if(rightHand) {
+                        rightHand.addEventListener('gripdown', (e) => this.onVRGripDown(e, rightHand));
+                        rightHand.addEventListener('gripup', (e) => this.onVRGripUp(e, rightHand));
+                        rightHand.addEventListener('triggerdown', (e) => this.onVRTriggerDown(e, rightHand));
+                        rightHand.addEventListener('triggerup', (e) => this.onVRTriggerUp(e, rightHand));
+                    }
+                });
             },
 
-            // --- VR 控制邏輯 ---
-            onGrabStartVR: function (evt) {
-                this.isGrabbedVR = true;
-                this.grabbedBy = evt.detail.hand; 
-                this.activateLaser();
-                // 監聽 VR 板機
-                this.grabbedBy.addEventListener('triggerdown', this.onTriggerDown);
-                this.grabbedBy.addEventListener('triggerup', this.onTriggerUp);
+            // --- VR 控制邏輯 (類似電腦版的吸取) ---
+            onVRGripDown: function(evt, hand) {
+                // 如果手部的雷射正指著這支筆 (由 hand 的 raycaster 判定)
+                // 這裡我們簡化：如果目前筆被 hover，且尚未被抓取，按抓握鍵就吸過來
+                if (!this.isGrabbedVR && !this.isGrabbedDesktop && this.isHovered) {
+                    this.pickupVR(hand);
+                }
             },
-            onGrabEndVR: function (evt) {
+            onVRGripUp: function(evt, hand) {
+                // 如果是這隻手抓著，放開抓握鍵就放下
+                if (this.isGrabbedVR && this.grabbedBy === hand) {
+                    this.dropVR();
+                }
+            },
+            onVRTriggerDown: function(evt, hand) { 
+                // 只有拿著筆的那隻手按下板機，才會開火
+                if(this.isGrabbedVR && this.grabbedBy === hand) {
+                    this.isFiring = true; 
+                }
+            },
+            onVRTriggerUp: function(evt, hand) { 
+                if(this.isGrabbedVR && this.grabbedBy === hand) {
+                    this.isFiring = false; 
+                }
+            },
+
+            pickupVR: function(hand) {
+                this.isGrabbedVR = true;
+                this.grabbedBy = hand;
+                this.isHovered = false;
+                
+                // 取消發光
+                const parts = this.el.querySelectorAll('a-cylinder, a-cone');
+                parts.forEach(part => {
+                    const color = part.getAttribute('color');
+                    part.setAttribute('material', `color: ${color}; emissive: #000; emissiveIntensity: 0`);
+                });
+
+                // 移除物理引擎
+                this.el.removeAttribute('dynamic-body');
+                
+                // 將筆變成手的子物件，這樣它就會跟著手移動 (像電腦版的跟隨攝影機)
+                // 但要先清除之前可能殘留的位置旋轉偏移
+                this.el.setAttribute('position', '0 0 -0.1'); // 在手的前方一點點
+                this.el.setAttribute('rotation', '-90 0 0'); // 調整角度讓筆尖朝前
+                
+                // 使用 object3D.add 進行層級變更，避免 A-Frame DOM 重置問題
+                hand.object3D.add(this.el.object3D);
+
+                this.activateLaser();
+            },
+            
+            dropVR: function() {
                 this.isGrabbedVR = false;
                 this.isFiring = false;
-                if (this.grabbedBy) {
-                    this.grabbedBy.removeEventListener('triggerdown', this.onTriggerDown);
-                    this.grabbedBy.removeEventListener('triggerup', this.onTriggerUp);
-                    this.grabbedBy = null;
-                }
+                this.grabbedBy = null;
+                
+                // 把它從手上拔下來，放回原本的場景中
+                this.el.sceneEl.object3D.add(this.el.object3D);
+
+                // 歸位
+                this.el.setAttribute('position', this.originalPosition);
+                this.el.setAttribute('rotation', this.originalRotation); 
+
+                // 重新加上物理引擎
+                this.el.setAttribute('dynamic-body', 'shape: box; mass: 0.5; linearDamping: 0.8; angularDamping: 0.8');
+
                 this.deactivateLaser();
             },
-            onTriggerDown: function() { if(this.isGrabbedVR) this.isFiring = true; },
-            onTriggerUp: function() { if(this.isGrabbedVR) this.isFiring = false; },
 
             // --- 電腦版 控制邏輯 ---
             onHoverEnter: function () {
@@ -152,7 +231,7 @@
                 if (this.isGrabbedDesktop || this.isGrabbedVR) return;
                 this.isHovered = true;
                 
-                // 視覺回饋：改變子物件的發光材質 (emissive) 產生發光提示
+                // 視覺回饋：發光
                 const parts = this.el.querySelectorAll('a-cylinder, a-cone');
                 parts.forEach(part => {
                     const color = part.getAttribute('color');
@@ -215,10 +294,13 @@
                 this.isFiring = false;
 
                 // 放開時，直接回到原本記錄的位子和角度
+                // 確保從攝影機座標系回到世界座標系 (移除跟隨)
+                // 其實我們在 tick 裡面是用 copy()，沒有改變 DOM 父子層級
+                // 所以直接重設 position 即可
                 this.el.setAttribute('position', this.originalPosition);
                 this.el.setAttribute('rotation', this.originalRotation); 
 
-                // 重新加上物理引擎，讓它穩穩待在桌上
+                // 重新加上物理引擎
                 this.el.setAttribute('dynamic-body', 'shape: box; mass: 0.5; linearDamping: 0.8; angularDamping: 0.8');
 
                 this.deactivateLaser();
@@ -377,9 +459,9 @@
         </p>
         <p style="margin-top: 10px; border-top: 1px solid #555; padding-top: 10px;">
            <b>【VR 設備操作】</b><br>
-           移動：左手搖桿前後、右手搖桿左右<br>
-           抓取：靠近雷射筆按 握把鍵/板機鍵<br>
-           射擊：拿起後按住 板機鍵 發射
+           移動：左右手搖桿皆可前後左右平移<br>
+           抓取：用控制器雷射對準筆，按住 <span class="highlight">握把鍵 (Grip)</span> 拿起/放下<br>
+           射擊：拿起後按住 <span class="highlight">板機鍵 (Trigger)</span> 發射
         </p>
     </div>
 
@@ -416,12 +498,13 @@
         <a-box class="target" position="-0.3 1.25 -1.5" rotation="0 45 0" width="0.5" height="0.5" depth="0.5" color="#FFFFFF" shadow static-body></a-box>
 
         <!-- 雷射筆 (加上透明的 geometry 外盒，確保 raycaster 與物理引擎能精準判定) -->
-        <a-entity id="laser-pen" class="interactable"
+        <a-entity id="laser-pen" class="interactable target"
             position="0.5 1.05 -1.3" rotation="-90 0 0" 
             geometry="primitive: box; width: 0.08; height: 0.35; depth: 0.08"
             material="opacity: 0; transparent: true; depthWrite: false"
             dynamic-body="shape: box; mass: 0.5; linearDamping: 0.8; angularDamping: 0.8"
-            grabbable hoverable laser-pen-behavior>
+            laser-pen-behavior>
+            <!-- 移除 super-hands 的 grabbable/hoverable，改用自訂邏輯 -->
             <a-cylinder radius="0.03" height="0.3" color="#0000FF" shadow></a-cylinder>
             <a-cone radius-bottom="0.03" radius-top="0.005" height="0.1" color="#FFD700" position="0 0.2 0" shadow></a-cone>
         </a-entity>
@@ -440,11 +523,17 @@
                 </a-entity>
             </a-camera>
 
-            <!-- 左手 VR 控制器 -->
-            <a-entity id="left-hand" hand-controls="hand: left" sphere-collider="objects: #laser-pen" super-hands></a-entity>
+            <!-- 左手 VR 控制器 (加入雷射射線，用來觸發 hover 效果與抓取) -->
+            <a-entity id="left-hand" hand-controls="hand: left"
+                      laser-controls="hand: left"
+                      raycaster="objects: .interactable; showLine: true; far: 5; lineColor: cyan; lineOpacity: 0.5">
+            </a-entity>
             
-            <!-- 右手 VR 控制器 -->
-            <a-entity id="right-hand" hand-controls="hand: right" sphere-collider="objects: #laser-pen" super-hands></a-entity>
+            <!-- 右手 VR 控制器 (加入雷射射線，用來觸發 hover 效果與抓取) -->
+            <a-entity id="right-hand" hand-controls="hand: right"
+                      laser-controls="hand: right"
+                      raycaster="objects: .interactable; showLine: true; far: 5; lineColor: cyan; lineOpacity: 0.5">
+            </a-entity>
         </a-entity>
         
     </a-scene>
