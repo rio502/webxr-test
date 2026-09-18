@@ -98,8 +98,8 @@
                 this.isGrabbedDesktop = false;
                 this.isHovered = false;
                 this.isFiring = false;
-                this.fireTimer = 0;
-                this.grabbedBy = null; // 紀錄被哪隻手/設備抓取
+                this.wasFiring = false; // 新增：用來判定「剛按下」與「剛放開」
+                this.grabbedBy = null; 
                 
                 // 綁定 this 供事件監聽器使用
                 this.onHoverEnter = this.onHoverEnter.bind(this);
@@ -123,19 +123,19 @@
                 window.addEventListener('mousedown', this.onMouseDown);
                 window.addEventListener('mouseup', this.onMouseUp);
 
-                // 建立一個內部實體作為射線發射起點 (給雷射筆發射子彈/火花用)
+                // 建立一個內部實體作為射線發射起點
                 this.raycasterEntity = document.createElement('a-entity');
                 this.raycasterEntity.setAttribute('position', '0 0.25 0'); 
                 this.raycasterEntity.setAttribute('rotation', '90 0 0');
                 this.el.appendChild(this.raycasterEntity);
 
-                // 儲存原始的位置與旋轉角度，以便放下時歸位
+                // 儲存原始的位置與旋轉角度
                 const pos = this.el.getAttribute('position');
                 const rot = this.el.getAttribute('rotation');
                 this.originalPosition = { x: pos.x, y: pos.y, z: pos.z };
                 this.originalRotation = { x: rot.x, y: rot.y, z: rot.z };
                 
-                // 監聽 VR 控制器事件 (由外部在控制器創建時觸發，或直接綁定至場景)
+                // 監聽 VR 控制器事件
                 this.el.sceneEl.addEventListener('loaded', () => {
                     const leftHand = document.querySelector('#left-hand');
                     const rightHand = document.querySelector('#right-hand');
@@ -152,58 +152,55 @@
                         rightHand.addEventListener('triggerdown', (e) => this.onVRTriggerDown(e, rightHand));
                         rightHand.addEventListener('triggerup', (e) => this.onVRTriggerUp(e, rightHand));
                     }
+
+                    // --- 初始化 Three.js 繪圖所需物件 ---
+                    this.points = []; 
+                    
+                    // 1. 外框紅線材質
+                    this.lineMaterial = new THREE.LineBasicMaterial({ color: 0xff0000, depthTest: false, linewidth: 3 });
+                    this.lineGeometry = new THREE.BufferGeometry();
+                    this.lineMesh = new THREE.Line(this.lineGeometry, this.lineMaterial);
+                    this.lineMesh.renderOrder = 999;
+                    
+                    // 2. 內部填滿材質 (半透明紅色)
+                    this.fillMaterial = new THREE.MeshBasicMaterial({ 
+                        color: 0xff3366, transparent: true, opacity: 0.5, 
+                        side: THREE.DoubleSide, depthTest: false 
+                    });
+                    this.fillMesh = new THREE.Mesh(new THREE.BufferGeometry(), this.fillMaterial);
+                    this.fillMesh.renderOrder = 998;
+
+                    this.el.sceneEl.object3D.add(this.lineMesh);
+                    this.el.sceneEl.object3D.add(this.fillMesh);
+                    this.hasLoaded = true;
                 });
             },
 
-            // --- VR 控制邏輯 (類似電腦版的吸取) ---
             onVRGripDown: function(evt, hand) {
-                // 如果手部的雷射正指著這支筆 (由 hand 的 raycaster 判定)
-                // 這裡我們簡化：如果目前筆被 hover，且尚未被抓取，按抓握鍵就吸過來
                 if (!this.isGrabbedVR && !this.isGrabbedDesktop && this.isHovered) {
                     this.pickupVR(hand);
                 }
             },
             onVRGripUp: function(evt, hand) {
-                // 如果是這隻手抓著，放開抓握鍵就放下
                 if (this.isGrabbedVR && this.grabbedBy === hand) {
                     this.dropVR();
                 }
             },
             onVRTriggerDown: function(evt, hand) { 
-                // 只有拿著筆的那隻手按下板機，才會開火
-                if(this.isGrabbedVR && this.grabbedBy === hand) {
-                    this.isFiring = true; 
-                }
+                if(this.isGrabbedVR && this.grabbedBy === hand) this.isFiring = true; 
             },
             onVRTriggerUp: function(evt, hand) { 
-                if(this.isGrabbedVR && this.grabbedBy === hand) {
-                    this.isFiring = false; 
-                }
+                if(this.isGrabbedVR && this.grabbedBy === hand) this.isFiring = false; 
             },
 
             pickupVR: function(hand) {
                 this.isGrabbedVR = true;
                 this.grabbedBy = hand;
                 this.isHovered = false;
-                
-                // 取消發光
-                const parts = this.el.querySelectorAll('a-cylinder, a-cone');
-                parts.forEach(part => {
-                    const color = part.getAttribute('color');
-                    part.setAttribute('material', `color: ${color}; emissive: #000; emissiveIntensity: 0`);
-                });
-
-                // 移除物理引擎
                 this.el.removeAttribute('dynamic-body');
-                
-                // 將筆變成手的子物件，這樣它就會跟著手移動 (像電腦版的跟隨攝影機)
-                // 但要先清除之前可能殘留的位置旋轉偏移
-                this.el.setAttribute('position', '0 0 -0.1'); // 在手的前方一點點
-                this.el.setAttribute('rotation', '-90 0 0'); // 調整角度讓筆尖朝前
-                
-                // 使用 object3D.add 進行層級變更，避免 A-Frame DOM 重置問題
+                this.el.setAttribute('position', '0 0 -0.1'); 
+                this.el.setAttribute('rotation', '-90 0 0'); 
                 hand.object3D.add(this.el.object3D);
-
                 this.activateLaser();
             },
             
@@ -211,37 +208,24 @@
                 this.isGrabbedVR = false;
                 this.isFiring = false;
                 this.grabbedBy = null;
-                
-                // 把它從手上拔下來，放回原本的場景中
                 this.el.sceneEl.object3D.add(this.el.object3D);
-
-                // 歸位
                 this.el.setAttribute('position', this.originalPosition);
                 this.el.setAttribute('rotation', this.originalRotation); 
-
-                // 重新加上物理引擎
                 this.el.setAttribute('dynamic-body', 'shape: box; mass: 0.5; linearDamping: 0.8; angularDamping: 0.8');
-
                 this.deactivateLaser();
             },
 
-            // --- 電腦版 控制邏輯 ---
             onHoverEnter: function () {
-                // 如果已經被拿在手上，就不需要 Hover 效果
                 if (this.isGrabbedDesktop || this.isGrabbedVR) return;
                 this.isHovered = true;
-                
-                // 視覺回饋：發光
                 const parts = this.el.querySelectorAll('a-cylinder, a-cone');
                 parts.forEach(part => {
                     const color = part.getAttribute('color');
-                    part.setAttribute('material', `color: ${color}; emissive: ${color}; emissiveIntensity: 0.5`);
+                    part.setAttribute('material', `color: ${color}; emissive: ${color}; emissiveIntensity: 0.6`);
                 });
             },
             onHoverLeave: function () {
                 this.isHovered = false;
-                
-                // 取消發光
                 const parts = this.el.querySelectorAll('a-cylinder, a-cone');
                 parts.forEach(part => {
                     const color = part.getAttribute('color');
@@ -250,63 +234,40 @@
             },
             onKeyDown: function (e) {
                 if (e.key.toLowerCase() === 'e') {
-                    // 若游標指著筆、尚未被任何人抓取，則拿起
                     if (!this.isGrabbedDesktop && this.isHovered && !this.isGrabbedVR) {
                         this.pickupDesktop();
-                    } 
-                    // 若已經拿在手上，則放下
-                    else if (this.isGrabbedDesktop) {
+                    } else if (this.isGrabbedDesktop) {
                         this.dropDesktop();
                     }
                 }
             },
             onMouseDown: function (e) {
-                // button 0 代表滑鼠左鍵，當拿在手上且按下左鍵時開始射擊
-                if (e.button === 0 && this.isGrabbedDesktop) {
-                    this.isFiring = true;
-                }
+                if (e.button === 0 && this.isGrabbedDesktop) this.isFiring = true;
             },
             onMouseUp: function (e) {
-                if (e.button === 0 && this.isGrabbedDesktop) {
-                    this.isFiring = false;
-                }
+                if (e.button === 0 && this.isGrabbedDesktop) this.isFiring = false;
             },
 
             pickupDesktop: function () {
                 this.isGrabbedDesktop = true;
                 this.isHovered = false;
-                
-                // 拿起時取消發光提示
                 const parts = this.el.querySelectorAll('a-cylinder, a-cone');
                 parts.forEach(part => {
                     const color = part.getAttribute('color');
                     part.setAttribute('material', `color: ${color}; emissive: #000; emissiveIntensity: 0`);
                 });
-
-                // 移除物理引擎，避免掉落
                 this.el.removeAttribute('dynamic-body');
-
-                // 啟動紅色雷射線
                 this.activateLaser();
             },
             dropDesktop: function () {
                 this.isGrabbedDesktop = false;
                 this.isFiring = false;
-
-                // 放開時，直接回到原本記錄的位子和角度
-                // 確保從攝影機座標系回到世界座標系 (移除跟隨)
-                // 其實我們在 tick 裡面是用 copy()，沒有改變 DOM 父子層級
-                // 所以直接重設 position 即可
                 this.el.setAttribute('position', this.originalPosition);
                 this.el.setAttribute('rotation', this.originalRotation); 
-
-                // 重新加上物理引擎
                 this.el.setAttribute('dynamic-body', 'shape: box; mass: 0.5; linearDamping: 0.8; angularDamping: 0.8');
-
                 this.deactivateLaser();
             },
 
-            // --- 共用射擊邏輯 ---
             activateLaser: function () {
                 this.raycasterEntity.setAttribute('raycaster', 'showLine: true; far: 20; objects: .target; lineColor: red; lineOpacity: 0.8');
                 this.raycasterEntity.setAttribute('cursor', 'rayOrigin: entity; defaultCursor: true');
@@ -315,54 +276,120 @@
                 this.raycasterEntity.removeAttribute('raycaster');
                 this.raycasterEntity.removeAttribute('cursor');
             },
+            
             tick: function (time, timeDelta) {
-                // 電腦版拿起時，每一幀跟隨攝影機位置 (避免 appendChild 導致 A-Frame 狀態重置)
                 if (this.isGrabbedDesktop) {
                     const camera = document.querySelector('a-camera');
                     const cam3D = camera.object3D;
-
-                    // 計算在相機右下方的偏移位置
                     const offset = new THREE.Vector3(0.3, -0.3, -0.5);
                     offset.applyMatrix4(cam3D.matrixWorld);
-
-                    // 更新雷射筆的位置與旋轉角度
                     this.el.object3D.position.copy(offset);
                     this.el.object3D.quaternion.copy(cam3D.quaternion);
-                    this.el.object3D.rotateX(-Math.PI / 2); // 將筆尖朝前
+                    this.el.object3D.rotateX(-Math.PI / 2); 
                 }
 
-                // 如果處於開火狀態 (長按滑鼠 或 按住VR板機)
-                if (this.isFiring) {
-                    this.fireTimer += timeDelta;
-                    // 控制射速：每 100 毫秒發射一次 (連續射擊)
-                    if (this.fireTimer > 100) { 
-                        this.fireTimer = 0;
-                        this.fireLaser();
+                if (this.hasLoaded) {
+                    // 偵測板機按下與放開的瞬間
+                    if (this.isFiring) {
+                        if (!this.wasFiring) {
+                            this.startDrawing(); // 剛按下：起筆清空
+                        }
+                        this.fireLaser(); // 持續按著：畫線
+                    } else {
+                        if (this.wasFiring) {
+                            this.stopDrawing(); // 剛放開：收筆閉合並計算
+                        }
                     }
+                    this.wasFiring = this.isFiring; // 記錄本幀狀態供下一幀比對
                 }
             },
+            
+            startDrawing: function() {
+                // 清空前一次的線條、面積與填滿色塊
+                this.points = [];
+                this.lineGeometry.setFromPoints(this.points);
+                this.fillMesh.geometry.dispose();
+                this.fillMesh.geometry = new THREE.BufferGeometry();
+                
+                const areaUI = document.getElementById('area-display');
+                if (areaUI) areaUI.style.display = 'none';
+            },
+
             fireLaser: function () {
                 const raycaster = this.raycasterEntity.components.raycaster;
-                if (!raycaster) return;
+                if (!raycaster || !raycaster.intersections) return;
 
                 const intersections = raycaster.intersections;
                 if (intersections && intersections.length > 0) {
                     const hitPoint = intersections[0].point;
-                    this.createSpark(hitPoint);
+                    
+                    // 記錄法向量 (第一筆時)
+                    if (this.points.length === 0) {
+                        const faceNormal = intersections[0].face.normal.clone();
+                        faceNormal.transformDirection(intersections[0].object.matrixWorld).normalize();
+                        this.drawNormal = faceNormal;
+                    }
+
+                    // 將點推入陣列
+                    this.points.push(hitPoint.clone());
+                    
+                    // 更新 3D 紅線
+                    this.lineGeometry.setFromPoints(this.points);
+                    this.lineGeometry.computeBoundingSphere();
                 }
             },
-            createSpark: function(position) {
-                const spark = document.createElement('a-sphere');
-                spark.setAttribute('radius', '0.04');
-                spark.setAttribute('color', '#FFEA00');
-                spark.setAttribute('position', position);
-                spark.setAttribute('material', 'shader: flat'); // 發光無陰影材質
-                spark.setAttribute('animation', 'property: scale; to: 0 0 0; dur: 200; easing: easeOutQuad');
-                
-                this.el.sceneEl.appendChild(spark);
-                setTimeout(() => {
-                    if (spark.parentNode) spark.parentNode.removeChild(spark);
-                }, 200);
+
+            stopDrawing: function() {
+                // 當放開板機時，將首尾相連並填滿、計算面積
+                if (this.points.length > 2) {
+                    const origin = this.points[0];
+                    const zAxis = this.drawNormal || new THREE.Vector3(0, 0, 1);
+                    const xAxis = new THREE.Vector3().subVectors(this.points[1], origin).normalize();
+                    const yAxis = new THREE.Vector3().crossVectors(zAxis, xAxis).normalize();
+
+                    const points2d = this.points.map(p => {
+                        const vec = new THREE.Vector3().subVectors(p, origin);
+                        return new THREE.Vector2(vec.dot(xAxis), vec.dot(yAxis));
+                    });
+
+                    // 1. 建立實體色塊 (ShapeGeometry)
+                    try {
+                        const shape = new THREE.Shape(points2d);
+                        const shapeGeo = new THREE.ShapeGeometry(shape);
+                        
+                        // 轉回 3D 空間
+                        const matrix = new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis);
+                        matrix.setPosition(origin);
+                        shapeGeo.applyMatrix4(matrix);
+                        
+                        // 稍微推出表面，避免 Z-fighting 閃爍
+                        shapeGeo.translate(this.drawNormal.x * 0.001, this.drawNormal.y * 0.001, this.drawNormal.z * 0.001);
+                        
+                        this.fillMesh.geometry.dispose(); 
+                        this.fillMesh.geometry = shapeGeo;
+                    } catch(e) {
+                        console.error("無法填滿該形狀：", e);
+                    }
+
+                    // 2. 將紅線的最後一點連回起點形成閉合
+                    const closedPoints = [...this.points, this.points[0]];
+                    this.lineGeometry.setFromPoints(closedPoints);
+
+                    // 3. 計算面積 (Shoelace Formula)
+                    let area = 0;
+                    for (let i = 0; i < points2d.length; i++) {
+                        let j = (i + 1) % points2d.length; 
+                        area += points2d[i].x * points2d[j].y - points2d[j].x * points2d[i].y;
+                    }
+                    area = Math.abs(area) / 2;
+
+                    const areaCm2 = (area * 10000).toFixed(1);
+                    const areaUI = document.getElementById('area-display');
+                    if (areaUI) {
+                        areaUI.innerHTML = `框選面積: <span class="highlight">${areaCm2} cm²</span>`;
+                        areaUI.style.display = 'block';
+                    }
+                }
             }
         });
 
@@ -494,7 +521,7 @@
         <!-- 大桌子 -->
         <a-box position="0 0.5 -1.5" width="2" height="1" depth="1" color="#8B4513" shadow static-body></a-box>
 
-        <!-- 白色方塊標靶 (加上 target class) -->
+        <!-- 白色方塊標靶 (移除 drawable-canvas 屬性) -->
         <a-box class="target" position="-0.3 1.25 -1.5" rotation="0 45 0" width="0.5" height="0.5" depth="0.5" color="#FFFFFF" shadow static-body></a-box>
 
         <!-- 雷射筆 (加上透明的 geometry 外盒，確保 raycaster 與物理引擎能精準判定) -->
