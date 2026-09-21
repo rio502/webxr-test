@@ -14,7 +14,6 @@
     <script src="https://unpkg.com/super-hands@3.0.3/dist/super-hands.min.js"></script>
 
     <script>
-        // 新增元件：雙模移動控制 (支援 WASD 與 VR 蘑菇頭)
         AFRAME.registerComponent('hybrid-locomotion', {
             schema: { moveSpeed: { default: 0.05 }, turnSpeed: { default: 0.05 } },
             init: function () {
@@ -83,14 +82,9 @@
                     direction.normalize();
                     rig.position.addScaledVector(direction, moveX * this.data.moveSpeed);
                 }
-
-                // 註：VR 頭盔的真實物理轉向 (左右看) 由 WebXR 原生處理。
-                // 如果需要「搖桿轉向 (Snap Turn)」，通常會指派給右手的 X 軸。
-                // 這裡目前依照要求，將左右手都設定為「平移」。
             }
         });
 
-        // 自訂元件：雷射筆行為 (整合 VR 抓取與電腦版 E 鍵滑鼠操作)
         AFRAME.registerComponent('laser-pen-behavior', {
             init: function () {
                 // 狀態變數
@@ -98,7 +92,7 @@
                 this.isGrabbedDesktop = false;
                 this.isHovered = false;
                 this.isFiring = false;
-                this.wasFiring = false; // 新增：用來判定「剛按下」與「剛放開」
+                this.wasFiring = false; // 用來判定「剛按下」與「剛放開」
                 this.grabbedBy = null; 
                 
                 // 綁定 this 供事件監聽器使用
@@ -232,6 +226,7 @@
                     part.setAttribute('material', `color: ${color}; emissive: #000; emissiveIntensity: 0`);
                 });
             },
+            
             onKeyDown: function (e) {
                 if (e.key.toLowerCase() === 'e') {
                     if (!this.isGrabbedDesktop && this.isHovered && !this.isGrabbedVR) {
@@ -305,7 +300,6 @@
             },
             
             startDrawing: function() {
-                // 清空前一次的線條、面積與填滿色塊
                 this.points = [];
                 this.lineGeometry.setFromPoints(this.points);
                 this.fillMesh.geometry.dispose();
@@ -340,7 +334,6 @@
             },
 
             stopDrawing: function() {
-                // 當放開板機時，將首尾相連並填滿、計算面積
                 if (this.points.length > 2) {
                     const origin = this.points[0];
                     const zAxis = this.drawNormal || new THREE.Vector3(0, 0, 1);
@@ -397,10 +390,24 @@
             const btnVR = document.getElementById('btn-enter-vr');
             const btnRestart = document.getElementById('btn-restart');
             
+            const scene = document.querySelector('a-scene');
+            const desktopCursor = document.getElementById('desktop-cursor');
+
+            // 進入 VR 時自動隱藏電腦版的中央圓點游標
+            if (scene) {
+                scene.addEventListener('enter-vr', () => {
+                    if (desktopCursor) desktopCursor.setAttribute('visible', 'false');
+                });
+                
+                // 退出 VR 時恢復顯示
+                scene.addEventListener('exit-vr', () => {
+                    if (desktopCursor) desktopCursor.setAttribute('visible', 'true');
+                });
+            }
+            
             // 點擊進入 VR 模式 (加入防呆檢查)
             if (btnVR) {
                 btnVR.addEventListener('click', () => {
-                    const scene = document.querySelector('a-scene');
                     if (scene) {
                         scene.enterVR();
                     }
@@ -424,6 +431,17 @@
             background-color: rgba(0, 0, 0, 0.7); padding: 15px; border-radius: 8px;
             backdrop-filter: blur(4px);
         }
+        
+        /* 面積計算顯示面板樣式 */
+        #area-display {
+            position: absolute; top: 10px; right: 10px; z-index: 100;
+            color: white; font-family: sans-serif; pointer-events: none;
+            background-color: rgba(0, 0, 0, 0.8); padding: 20px; border-radius: 12px;
+            font-size: 24px; border: 2px solid #FFEA00;
+            display: none; /* 預設隱藏，畫完才顯示 */
+            backdrop-filter: blur(5px);
+        }
+
         .highlight { color: #FFEA00; }
 
         /* 隱藏 A-Frame 預設的右下角 VR 按鈕 */
@@ -482,14 +500,19 @@
         <p><b>【電腦版操作】</b><br>
            移動：<span class="highlight">W A S D</span> | 視角：<span class="highlight">點擊畫面鎖定並滑動滑鼠</span><br>
            抓取：游標對準雷射筆後按 <span class="highlight">E</span> 拿起/放下<br>
-           射擊：拿起後 <span class="highlight">長按滑鼠左鍵</span> 連續發射
+           射擊：拿起後 <span class="highlight">長按滑鼠左鍵</span> 連續畫線
         </p>
         <p style="margin-top: 10px; border-top: 1px solid #555; padding-top: 10px;">
            <b>【VR 設備操作】</b><br>
            移動：左右手搖桿皆可前後左右平移<br>
            抓取：用控制器雷射對準筆，按住 <span class="highlight">握把鍵 (Grip)</span> 拿起/放下<br>
-           射擊：拿起後按住 <span class="highlight">板機鍵 (Trigger)</span> 發射
+           射擊：拿起後按住 <span class="highlight">板機鍵 (Trigger)</span> 連續畫線
         </p>
+    </div>
+
+    <!-- 面積計算顯示面板 -->
+    <div id="area-display">
+        框選面積: <span class="highlight">0 cm²</span>
     </div>
 
     <!-- 自訂 VR 與 重新開始 按鈕 -->
@@ -521,17 +544,23 @@
         <!-- 大桌子 -->
         <a-box position="0 0.5 -1.5" width="2" height="1" depth="1" color="#8B4513" shadow static-body></a-box>
 
-        <!-- 白色方塊標靶 (移除 drawable-canvas 屬性) -->
+        <!-- 白色方塊標靶 -->
         <a-box class="target" position="-0.3 1.25 -1.5" rotation="0 45 0" width="0.5" height="0.5" depth="0.5" color="#FFFFFF" shadow static-body></a-box>
 
-        <!-- 雷射筆 (加上透明的 geometry 外盒，確保 raycaster 與物理引擎能精準判定) -->
-        <a-entity id="laser-pen" class="interactable target"
+        <!-- 新增：左邊的測試桌 -->
+        <a-box position="-2.5 0.5 -1.5" width="2" height="1" depth="1" color="#5C4033" shadow static-body></a-box>
+
+        <!-- 新增：不規則測試物體 (十二面體與圓柱) -->
+        <a-dodecahedron class="target" position="-2.5 1.3 -1.5" radius="0.4" color="#FFD700" shadow static-body></a-dodecahedron>
+        <a-cylinder class="target" position="-1.7 1.3 -1.5" radius="0.3" height="0.6" color="#FF6347" shadow static-body></a-cylinder>
+
+        <!-- 雷射筆 (移除 class="target"，避免雷射打中自己) -->
+        <a-entity id="laser-pen" class="interactable"
             position="0.5 1.05 -1.3" rotation="-90 0 0" 
             geometry="primitive: box; width: 0.08; height: 0.35; depth: 0.08"
             material="opacity: 0; transparent: true; depthWrite: false"
             dynamic-body="shape: box; mass: 0.5; linearDamping: 0.8; angularDamping: 0.8"
             laser-pen-behavior>
-            <!-- 移除 super-hands 的 grabbable/hoverable，改用自訂邏輯 -->
             <a-cylinder radius="0.03" height="0.3" color="#0000FF" shadow></a-cylinder>
             <a-cone radius-bottom="0.03" radius-top="0.005" height="0.1" color="#FFD700" position="0 0.2 0" shadow></a-cone>
         </a-entity>
@@ -541,8 +570,9 @@
             
             <!-- 攝影機：開啟 pointerLockEnabled 支援 FPS 滑鼠視角轉動 -->
             <a-camera position="0 1.6 0" look-controls="pointerLockEnabled: true" wasd-controls="enabled: false">
-                <!-- 電腦版畫面的中央準心 (僅與 class="interactable" 的物件互動) -->
-                <a-entity cursor="fuse: false; rayOrigin: entity;"
+                <!-- 電腦版畫面的中央準心 (新增 id="desktop-cursor" 供 VR 隱藏) -->
+                <a-entity id="desktop-cursor"
+                          cursor="fuse: false; rayOrigin: entity;"
                           position="0 0 -1"
                           geometry="primitive: ring; radiusInner: 0.015; radiusOuter: 0.025"
                           material="color: white; shader: flat; opacity: 0.5"
@@ -550,16 +580,20 @@
                 </a-entity>
             </a-camera>
 
-            <!-- 左手 VR 控制器 (加入雷射射線，用來觸發 hover 效果與抓取) -->
-            <a-entity id="left-hand" hand-controls="hand: left"
-                      laser-controls="hand: left"
-                      raycaster="objects: .interactable; showLine: true; far: 5; lineColor: cyan; lineOpacity: 0.5">
+            <!-- 左手 VR 控制器 -->
+            <a-entity id="left-hand" hand-controls="hand: left">
+                <!-- 獨立的射線子物件，透過 rotation 調整發射角度 (向下旋轉約 75 度，使其平行於中指朝前) -->
+                <a-entity rotation="-75 0 0"
+                          raycaster="objects: .interactable; showLine: true; far: 5; lineColor: cyan; lineOpacity: 0.5">
+                </a-entity>
             </a-entity>
             
-            <!-- 右手 VR 控制器 (加入雷射射線，用來觸發 hover 效果與抓取) -->
-            <a-entity id="right-hand" hand-controls="hand: right"
-                      laser-controls="hand: right"
-                      raycaster="objects: .interactable; showLine: true; far: 5; lineColor: cyan; lineOpacity: 0.5">
+            <!-- 右手 VR 控制器 -->
+            <a-entity id="right-hand" hand-controls="hand: right">
+                <!-- 獨立的射線子物件，透過 rotation 調整發射角度 -->
+                <a-entity rotation="-75 0 0"
+                          raycaster="objects: .interactable; showLine: true; far: 5; lineColor: cyan; lineOpacity: 0.5">
+                </a-entity>
             </a-entity>
         </a-entity>
         
