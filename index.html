@@ -564,19 +564,24 @@
                 </a-entity>
             </a-camera>
 
-            <!-- 左手 VR 控制器 (射線朝中指方向) -->
-            <a-entity id="left-hand" hand-controls="hand: left"
-                      laser-controls="hand: left"
-                      raycaster="objects: .interactable; showLine: true; far: 5; lineColor: cyan; lineOpacity: 0.5"
-                      rotation="-75 0 0">
+            <!-- 左手 VR 控制器 (本體不旋轉，內部發射器旋轉) -->
+            <a-entity id="left-hand" hand-controls="hand: left">
+                <!-- 獨立的射線子實體，向下旋轉 -75 度以平行於中指 -->
+                <a-entity raycaster="objects: .interactable; showLine: true; far: 5; lineColor: cyan; lineOpacity: 0.5"
+                          cursor="rayOrigin: entity"
+                          rotation="-75 0 0">
+                </a-entity>
             </a-entity>
             
-            <!-- 右手 VR 控制器 (射線朝中指方向) -->
-            <a-entity id="right-hand" hand-controls="hand: right"
-                      laser-controls="hand: right"
-                      raycaster="objects: .interactable; showLine: true; far: 5; lineColor: cyan; lineOpacity: 0.5"
-                      rotation="-75 0 0">
+            <!-- 右手 VR 控制器 (本體不旋轉，內部發射器旋轉) -->
+            <a-entity id="right-hand" hand-controls="hand: right">
+                <!-- 獨立的射線子實體，向下旋轉 -75 度以平行於中指 -->
+                <a-entity raycaster="objects: .interactable; showLine: true; far: 5; lineColor: cyan; lineOpacity: 0.5"
+                          cursor="rayOrigin: entity"
+                          rotation="-75 0 0">
+                </a-entity>
             </a-entity>
+
         </a-entity>
         
     </a-scene>
