@@ -181,8 +181,11 @@
                 this.grabbedBy = hand;
                 this.isHovered = false;
                 this.el.removeAttribute('dynamic-body');
-                this.el.setAttribute('position', '0 0 -0.1'); 
-                this.el.setAttribute('rotation', '-90 0 0'); 
+                
+                // 【修改這裡】將位置往上、往虎口靠，並將角度調整為傾斜 60 度
+                this.el.setAttribute('position', '0 0.05 -0.05'); 
+                this.el.setAttribute('rotation', '-60 0 0'); 
+                
                 hand.object3D.add(this.el.object3D);
                 this.activateLaser();
             },
