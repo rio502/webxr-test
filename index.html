@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>A-Frame 雙模 (VR/電腦) 雷射抓取與射擊</title>
+    <title>真實 3D 表面積計算 (無縫塗色版)</title>
     <!-- 引入 A-Frame 核心 -->
     <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
     <!-- 引入 aframe-physics-system 處理物理引擎 (使用 CANNON.js) -->
@@ -14,35 +14,27 @@
     <script src="https://unpkg.com/super-hands@3.0.3/dist/super-hands.min.js"></script>
 
     <script>
-        // 新增元件：雙模移動控制 (支援 WASD 與 VR 蘑菇頭)
         AFRAME.registerComponent('hybrid-locomotion', {
             schema: { moveSpeed: { default: 0.05 }, turnSpeed: { default: 0.05 } },
             init: function () {
-                this.leftY = 0; // 左手前後
-                this.leftX = 0; // 左手左右
-                this.rightY = 0; // 右手前後
-                this.rightX = 0; // 右手左右
+                this.leftY = 0; this.leftX = 0; this.rightY = 0; this.rightX = 0;
                 this.keys = {};
 
-                // 監聽鍵盤 WASD 按壓狀態
                 window.addEventListener('keydown', (e) => { this.keys[e.code] = true; });
                 window.addEventListener('keyup', (e) => { this.keys[e.code] = false; });
                 
-                // 等待場景載入完成後綁定 VR 搖桿事件
                 this.el.sceneEl.addEventListener('loaded', () => {
                     const leftHand = document.querySelector('#left-hand');
                     const rightHand = document.querySelector('#right-hand');
                     
                     if (leftHand) {
                         leftHand.addEventListener('thumbstickmoved', (evt) => { 
-                            this.leftX = evt.detail.x; 
-                            this.leftY = evt.detail.y; 
+                            this.leftX = evt.detail.x; this.leftY = evt.detail.y; 
                         });
                     }
                     if (rightHand) {
                         rightHand.addEventListener('thumbstickmoved', (evt) => { 
-                            this.rightX = evt.detail.x; 
-                            this.rightY = evt.detail.y;
+                            this.rightX = evt.detail.x; this.rightY = evt.detail.y;
                         });
                     }
                 });
@@ -51,7 +43,6 @@
                 const rig = this.el.object3D;
                 const camera = document.querySelector('a-camera').object3D;
 
-                // 讀取輸入 (VR優先，若無VR則讀取鍵盤)
                 let moveZ = this.leftY + this.rightY;
                 let moveX = this.leftX + this.rightX;
 
@@ -63,27 +54,22 @@
                 moveZ = Math.max(-1, Math.min(1, moveZ));
                 moveX = Math.max(-1, Math.min(1, moveX));
 
-                // 處理前後移動 (Z軸)
                 if (Math.abs(moveZ) > 0.05) {
                     const direction = new THREE.Vector3(0, 0, 1);
                     direction.applyQuaternion(camera.quaternion);
-                    direction.y = 0; // 鎖定 Y 軸，避免飛天遁地
-                    direction.normalize();
+                    direction.y = 0; direction.normalize();
                     rig.position.addScaledVector(direction, moveZ * this.data.moveSpeed);
                 }
 
-                // 處理左右平移 (X軸)
                 if (Math.abs(moveX) > 0.05) {
                     const direction = new THREE.Vector3(1, 0, 0);
                     direction.applyQuaternion(camera.quaternion);
-                    direction.y = 0;
-                    direction.normalize();
+                    direction.y = 0; direction.normalize();
                     rig.position.addScaledVector(direction, moveX * this.data.moveSpeed);
                 }
             }
         });
 
-        // 自訂元件：雷射筆行為 (整合 VR 抓取與電腦版 E 鍵滑鼠操作)
         AFRAME.registerComponent('laser-pen-behavior', {
             init: function () {
                 this.isGrabbedVR = false;
@@ -92,6 +78,7 @@
                 this.isFiring = false;
                 this.wasFiring = false; 
                 this.grabbedBy = null; 
+                this.lastPreviewTime = 0; 
                 
                 this.onHoverEnter = this.onHoverEnter.bind(this);
                 this.onHoverLeave = this.onHoverLeave.bind(this);
@@ -138,59 +125,66 @@
                         rightHand.addEventListener('triggerup', (e) => this.onVRTriggerUp(e, rightHand));
                     }
 
-                    // --- 初始化 Three.js 繪圖所需物件 ---
-                    this.points = []; 
+                    this.points3D = []; 
                     
-                    this.lineMaterial = new THREE.LineBasicMaterial({ color: 0xff0000, depthTest: false, linewidth: 3 });
+                    // 邊界紅線材質
+                    this.lineMaterial = new THREE.LineBasicMaterial({ 
+                        color: 0xff0000, 
+                        depthTest: false, 
+                        depthWrite: false
+                    });
                     this.lineGeometry = new THREE.BufferGeometry();
                     this.lineMesh = new THREE.Line(this.lineGeometry, this.lineMaterial);
                     this.lineMesh.renderOrder = 999;
                     
-                    this.fillMaterial = new THREE.MeshBasicMaterial({ 
-                        color: 0xff3366, transparent: true, opacity: 0.5, 
-                        side: THREE.DoubleSide, depthTest: false 
+                    this.dummy = new THREE.Object3D(); 
+                    
+                    // 預覽塗料 (黃色)
+                    this.maxPreviewHits = 10000; 
+                    const previewGeo = new THREE.BoxGeometry(1, 1, 0.002); 
+                    const previewMat = new THREE.MeshBasicMaterial({ 
+                        color: 0xFFEA00, transparent: true, opacity: 0.5, depthTest: true, depthWrite: false 
                     });
-                    this.fillMesh = new THREE.Mesh(new THREE.BufferGeometry(), this.fillMaterial);
-                    this.fillMesh.renderOrder = 998;
+                    this.previewInstancedMesh = new THREE.InstancedMesh(previewGeo, previewMat, this.maxPreviewHits);
+                    this.previewInstancedMesh.count = 0; 
+                    this.previewInstancedMesh.renderOrder = 997;
 
+                    // 最終塗料 (綠色)
+                    this.maxHits = 40000; 
+                    const paintGeo = new THREE.BoxGeometry(1, 1, 0.002); 
+                    const paintMat = new THREE.MeshBasicMaterial({ 
+                        color: 0x00ff66, transparent: true, opacity: 0.85, depthTest: true, depthWrite: false 
+                    });
+                    this.hitInstancedMesh = new THREE.InstancedMesh(paintGeo, paintMat, this.maxHits);
+                    this.hitInstancedMesh.count = 0; 
+                    this.hitInstancedMesh.renderOrder = 998;
+                    
                     this.el.sceneEl.object3D.add(this.lineMesh);
-                    this.el.sceneEl.object3D.add(this.fillMesh);
+                    this.el.sceneEl.object3D.add(this.previewInstancedMesh);
+                    this.el.sceneEl.object3D.add(this.hitInstancedMesh);
+                    
+                    this.cameraEl = document.querySelector('a-camera');
                     this.hasLoaded = true;
                 });
             },
 
-            onVRGripDown: function(evt, hand) {
-                if (!this.isGrabbedVR && !this.isGrabbedDesktop && this.isHovered) {
-                    this.pickupVR(hand);
-                }
-            },
-            onVRGripUp: function(evt, hand) {
-                if (this.isGrabbedVR && this.grabbedBy === hand) {
-                    this.dropVR();
-                }
-            },
-            onVRTriggerDown: function(evt, hand) { 
-                if(this.isGrabbedVR && this.grabbedBy === hand) this.isFiring = true; 
-            },
-            onVRTriggerUp: function(evt, hand) { 
-                if(this.isGrabbedVR && this.grabbedBy === hand) this.isFiring = false; 
-            },
+            onVRGripDown: function(evt, hand) { if (!this.isGrabbedVR && !this.isGrabbedDesktop && this.isHovered) this.pickupVR(hand); },
+            onVRGripUp: function(evt, hand) { if (this.isGrabbedVR && this.grabbedBy === hand) this.dropVR(); },
+            onVRTriggerDown: function(evt, hand) { if(this.isGrabbedVR && this.grabbedBy === hand) this.isFiring = true; },
+            onVRTriggerUp: function(evt, hand) { if(this.isGrabbedVR && this.grabbedBy === hand) this.isFiring = false; },
 
             pickupVR: function(hand) {
-                this.isGrabbedVR = true;
-                this.grabbedBy = hand;
-                this.isHovered = false;
+                this.isGrabbedVR = true; this.grabbedBy = hand; this.isHovered = false;
                 this.el.removeAttribute('dynamic-body');
                 
-                // 位置：移到控制器上方偏前，正好是食指扣住板機的位置
+                // 位置：移到控制器上方偏前
                 this.el.setAttribute('position', '0 0.02 -0.06'); 
-                
-                // 角度：-90 (放平) 再往下壓 45 度，剛好順著食指的方向
+                // 角度：-135 剛好順著食指的方向
                 this.el.setAttribute('rotation', '-135 0 0'); 
                 
                 hand.object3D.add(this.el.object3D);
                 
-                // 【修正】：只精準隱藏「手部的 3D 網格模型」，這樣雷射筆(子物件)就不會跟著消失
+                // 【隱藏替換法】抓取時隱藏原本的手掌模型
                 const handMesh = hand.getObject3D('mesh');
                 if (handMesh) handMesh.visible = false;
                 
@@ -198,20 +192,17 @@
             },
             
             dropVR: function() {
-                this.el.setAttribute('dynamic-body', 'shape: box; mass: 0.5; linearDamping: 0.8; angularDamping: 0.8');
-                
-                // 【修正】：放下時，將手的 3D 網格模型重新顯示出來
+                // 【隱藏替換法】放下時恢復顯示手掌模型
                 if (this.grabbedBy) {
                     const handMesh = this.grabbedBy.getObject3D('mesh');
                     if (handMesh) handMesh.visible = true;
                 }
 
-                this.isGrabbedVR = false;
-                this.isFiring = false;
-                this.grabbedBy = null;
+                this.isGrabbedVR = false; this.isFiring = false; this.grabbedBy = null;
                 this.el.sceneEl.object3D.add(this.el.object3D);
                 this.el.setAttribute('position', this.originalPosition);
                 this.el.setAttribute('rotation', this.originalRotation); 
+                this.el.setAttribute('dynamic-body', 'shape: box; mass: 0.5; linearDamping: 0.8; angularDamping: 0.8');
                 this.deactivateLaser();
             },
 
@@ -241,16 +232,11 @@
                     }
                 }
             },
-            onMouseDown: function (e) {
-                if (e.button === 0 && this.isGrabbedDesktop) this.isFiring = true;
-            },
-            onMouseUp: function (e) {
-                if (e.button === 0 && this.isGrabbedDesktop) this.isFiring = false;
-            },
+            onMouseDown: function (e) { if (e.button === 0 && this.isGrabbedDesktop) this.isFiring = true; },
+            onMouseUp: function (e) { if (e.button === 0 && this.isGrabbedDesktop) this.isFiring = false; },
 
             pickupDesktop: function () {
-                this.isGrabbedDesktop = true;
-                this.isHovered = false;
+                this.isGrabbedDesktop = true; this.isHovered = false;
                 const parts = this.el.querySelectorAll('a-cylinder, a-cone');
                 parts.forEach(part => {
                     const color = part.getAttribute('color');
@@ -259,9 +245,9 @@
                 this.el.removeAttribute('dynamic-body');
                 this.activateLaser();
             },
+            
             dropDesktop: function () {
-                this.isGrabbedDesktop = false;
-                this.isFiring = false;
+                this.isGrabbedDesktop = false; this.isFiring = false;
                 this.el.setAttribute('position', this.originalPosition);
                 this.el.setAttribute('rotation', this.originalRotation); 
                 this.el.setAttribute('dynamic-body', 'shape: box; mass: 0.5; linearDamping: 0.8; angularDamping: 0.8');
@@ -290,115 +276,273 @@
 
                 if (this.hasLoaded) {
                     if (this.isFiring) {
-                        if (!this.wasFiring) {
-                            this.startDrawing();
-                        }
+                        if (!this.wasFiring) this.startDrawing();
+                        
                         this.fireLaser();
-                    } else {
-                        if (this.wasFiring) {
-                            this.stopDrawing();
+                        
+                        if (time - this.lastPreviewTime > 80) {
+                            this.updatePreviewFill();
+                            this.lastPreviewTime = time;
                         }
+                    } else {
+                        if (this.wasFiring) this.stopDrawing();
                     }
                     this.wasFiring = this.isFiring;
                 }
             },
             
             startDrawing: function() {
-                // 清空前一次的線條與填滿色塊
-                this.points = [];
-                this.lineGeometry.setFromPoints(this.points);
-                this.fillMesh.geometry.dispose();
-                this.fillMesh.geometry = new THREE.BufferGeometry();
+                this.isProcessing = false;
+                if (this.processTimeout) clearTimeout(this.processTimeout);
+
+                this.points3D = [];
+                this.lineGeometry.setFromPoints(this.points3D);
                 
-                // 更新 HTML 顯示
+                this.hitInstancedMesh.count = 0; 
+                this.hitInstancedMesh.instanceMatrix.needsUpdate = true;
+                
+                this.previewInstancedMesh.count = 0;
+                this.previewInstancedMesh.instanceMatrix.needsUpdate = true;
+                
                 const areaUI = document.getElementById('area-display');
                 if (areaUI) areaUI.style.display = 'none';
 
-                // 更新場景中的告示牌狀態
                 const billboardText = document.getElementById('billboard-text');
                 if (billboardText) billboardText.setAttribute('text', 'value', 'Drawing...');
             },
 
             fireLaser: function () {
-                const raycaster = this.raycasterEntity.components.raycaster;
-                if (!raycaster || !raycaster.intersections) return;
+                const raycasterComponent = this.raycasterEntity.components.raycaster;
+                if (!raycasterComponent || !raycasterComponent.intersections) return;
 
-                const intersections = raycaster.intersections;
+                const intersections = raycasterComponent.intersections;
                 if (intersections && intersections.length > 0) {
-                    const hitPoint = intersections[0].point;
+                    const hitNormal = intersections[0].face.normal.clone().transformDirection(intersections[0].object.matrixWorld).normalize();
+                    const offsetPoint = intersections[0].point.clone().addScaledVector(hitNormal, 0.002);
                     
-                    if (this.points.length === 0) {
-                        const faceNormal = intersections[0].face.normal.clone();
-                        faceNormal.transformDirection(intersections[0].object.matrixWorld).normalize();
-                        this.drawNormal = faceNormal;
-                    }
-
-                    this.points.push(hitPoint.clone());
-                    
-                    this.lineGeometry.setFromPoints(this.points);
+                    this.points3D.push(offsetPoint);
+                    this.lineGeometry.setFromPoints(this.points3D);
                     this.lineGeometry.computeBoundingSphere();
                 }
             },
 
+            isPointInPolygon: function(px, py, polygon) {
+                let isInside = false;
+                for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+                    let xi = polygon[i].x, yi = polygon[i].y;
+                    let xj = polygon[j].x, yj = polygon[j].y;
+                    let intersect = ((yi > py) != (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi);
+                    if (intersect) isInside = !isInside;
+                }
+                return isInside;
+            },
+
+            updatePreviewFill: function() {
+                if (this.points3D.length < 3) return;
+
+                const camera = this.cameraEl.components.camera.camera;
+                const ndcPoints = [];
+                let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+
+                this.points3D.forEach(p3d => {
+                    const pNdc = p3d.clone().project(camera);
+                    ndcPoints.push({ x: pNdc.x, y: pNdc.y });
+                    if (pNdc.x < minX) minX = pNdc.x;
+                    if (pNdc.x > maxX) maxX = pNdc.x;
+                    if (pNdc.y < minY) minY = pNdc.y;
+                    if (pNdc.y > maxY) maxY = pNdc.y;
+                });
+
+                const marginX = (maxX - minX) * 0.05;
+                const marginY = (maxY - minY) * 0.05;
+                minX -= marginX; maxX += marginX;
+                minY -= marginY; maxY += marginY;
+
+                const resolution = 50; 
+                const stepX = (maxX - minX) / resolution;
+                const stepY = (maxY - minY) / resolution;
+                if (stepX <= 0 || stepY <= 0) return;
+
+                const raycaster = new THREE.Raycaster();
+                const targetEls = document.querySelectorAll('.target');
+                const targetMeshes = Array.from(targetEls).map(el => el.getObject3D('mesh')).filter(m => m);
+
+                let hitCount = 0;
+                const fov = camera.fov * (Math.PI / 180);
+                const aspect = camera.aspect;
+
+                for (let x = minX; x <= maxX; x += stepX) {
+                    for (let y = minY; y <= maxY; y += stepY) {
+                        if (this.isPointInPolygon(x, y, ndcPoints)) {
+                            raycaster.setFromCamera(new THREE.Vector2(x, y), camera);
+                            const intersects = raycaster.intersectObjects(targetMeshes, true);
+
+                            if (intersects.length > 0) {
+                                const hit = intersects[0];
+                                
+                                if (hitCount < this.maxPreviewHits) {
+                                    const dist = hit.distance;
+                                    const planeHeightAtDist = 2 * Math.tan(fov / 2) * dist;
+                                    const planeWidthAtDist = planeHeightAtDist * aspect;
+                                    const patchWidth = (stepX / 2) * planeWidthAtDist; 
+                                    const patchHeight = (stepY / 2) * planeHeightAtDist;
+
+                                    const normal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).normalize();
+                                    
+                                    this.dummy.scale.set(patchWidth * 2.5, patchHeight * 2.5, 1);
+                                    this.dummy.position.copy(hit.point);
+                                    this.dummy.position.addScaledVector(normal, 0.002);
+                                    this.dummy.quaternion.setFromUnitVectors(new THREE.Vector3(0,0,1), normal);
+                                    
+                                    this.dummy.updateMatrix();
+                                    this.previewInstancedMesh.setMatrixAt(hitCount, this.dummy.matrix);
+                                    hitCount++;
+                                }
+                            }
+                        }
+                    }
+                }
+                this.previewInstancedMesh.count = hitCount;
+                this.previewInstancedMesh.instanceMatrix.needsUpdate = true;
+            },
+
             stopDrawing: function() {
-                if (this.points.length > 2) {
-                    const origin = this.points[0];
-                    const zAxis = this.drawNormal || new THREE.Vector3(0, 0, 1);
-                    const xAxis = new THREE.Vector3().subVectors(this.points[1], origin).normalize();
-                    const yAxis = new THREE.Vector3().crossVectors(zAxis, xAxis).normalize();
+                if (this.points3D.length < 3) {
+                    const billboardText = document.getElementById('billboard-text');
+                    if (billboardText) billboardText.setAttribute('text', 'value', 'Ready');
+                    return;
+                }
 
-                    const points2d = this.points.map(p => {
-                        const vec = new THREE.Vector3().subVectors(p, origin);
-                        return new THREE.Vector2(vec.dot(xAxis), vec.dot(yAxis));
-                    });
+                this.previewInstancedMesh.count = 0;
+                this.previewInstancedMesh.instanceMatrix.needsUpdate = true;
 
-                    // 建立實體色塊 (ShapeGeometry)
-                    try {
-                        const shape = new THREE.Shape(points2d);
-                        const shapeGeo = new THREE.ShapeGeometry(shape);
-                        
-                        const matrix = new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis);
-                        matrix.setPosition(origin);
-                        shapeGeo.applyMatrix4(matrix);
-                        
-                        shapeGeo.translate(this.drawNormal.x * 0.001, this.drawNormal.y * 0.001, this.drawNormal.z * 0.001);
-                        
-                        this.fillMesh.geometry.dispose(); 
-                        this.fillMesh.geometry = shapeGeo;
-                    } catch(e) {
-                        console.error("無法填滿該形狀：", e);
+                const billboardText = document.getElementById('billboard-text');
+                if (billboardText) billboardText.setAttribute('text', 'value', 'Painting...');
+
+                const activeCamera = this.cameraEl.components.camera.camera;
+                const staticCamera = activeCamera.clone(); 
+                
+                const ndcPoints = [];
+                let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+
+                this.points3D.forEach(p3d => {
+                    const pNdc = p3d.clone().project(staticCamera);
+                    ndcPoints.push({ x: pNdc.x, y: pNdc.y });
+                    if (pNdc.x < minX) minX = pNdc.x;
+                    if (pNdc.x > maxX) maxX = pNdc.x;
+                    if (pNdc.y < minY) minY = pNdc.y;
+                    if (pNdc.y > maxY) maxY = pNdc.y;
+                });
+
+                const marginX = (maxX - minX) * 0.05;
+                const marginY = (maxY - minY) * 0.05;
+                minX -= marginX; maxX += marginX;
+                minY -= marginY; maxY += marginY;
+
+                const resolution = 120; 
+                const stepX = (maxX - minX) / resolution;
+                const stepY = (maxY - minY) / resolution;
+                if (stepX <= 0 || stepY <= 0) return;
+                
+                let totalAreaSqMeters = 0;
+                let hitCount = 0;
+                this.hitInstancedMesh.count = 0;
+
+                const raycaster = new THREE.Raycaster();
+                const targetEls = document.querySelectorAll('.target');
+                const targetMeshes = Array.from(targetEls).map(el => el.getObject3D('mesh')).filter(m => m);
+
+                const fov = staticCamera.fov * (Math.PI / 180);
+                const aspect = staticCamera.aspect;
+
+                let currentX = minX;
+                let currentY = minY;
+                
+                this.isProcessing = true; 
+                let lastTextUpdateTime = 0; 
+                
+                const processChunk = () => {
+                    if (!this.isProcessing) return; 
+                    
+                    const chunkStartTime = performance.now();
+                    
+                    while (currentX <= maxX) {
+                        while (currentY <= maxY) {
+                            if (this.isPointInPolygon(currentX, currentY, ndcPoints)) {
+                                raycaster.setFromCamera(new THREE.Vector2(currentX, currentY), staticCamera);
+                                const intersects = raycaster.intersectObjects(targetMeshes, true);
+
+                                if (intersects.length > 0) {
+                                    const hit = intersects[0];
+                                    const dist = hit.distance;
+                                    const planeHeightAtDist = 2 * Math.tan(fov / 2) * dist;
+                                    const planeWidthAtDist = planeHeightAtDist * aspect;
+                                    
+                                    const patchWidth = (stepX / 2) * planeWidthAtDist; 
+                                    const patchHeight = (stepY / 2) * planeHeightAtDist;
+                                    const basePatchArea = patchWidth * patchHeight;
+
+                                    const rayDir = raycaster.ray.direction;
+                                    const normal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).normalize();
+                                    const cosTheta = Math.abs(rayDir.dot(normal));
+
+                                    const effectiveCosTheta = Math.max(cosTheta, 0.1); 
+                                    const trueSurfacePatchArea = basePatchArea / effectiveCosTheta;
+                                    totalAreaSqMeters += trueSurfacePatchArea;
+
+                                    if (hitCount < this.maxHits) {
+                                        this.dummy.scale.set(patchWidth * 2.5, patchHeight * 2.5, 1);
+                                        this.dummy.position.copy(hit.point);
+                                        this.dummy.position.addScaledVector(normal, 0.002); 
+                                        this.dummy.quaternion.setFromUnitVectors(new THREE.Vector3(0,0,1), normal);
+                                        
+                                        this.dummy.updateMatrix();
+                                        this.hitInstancedMesh.setMatrixAt(hitCount, this.dummy.matrix);
+                                        hitCount++;
+                                    }
+                                }
+                            }
+                            currentY += stepY;
+                            
+                            if (performance.now() - chunkStartTime > 15) {
+                                this.hitInstancedMesh.count = hitCount;
+                                this.hitInstancedMesh.instanceMatrix.needsUpdate = true;
+                                
+                                if (performance.now() - lastTextUpdateTime > 250) {
+                                    const progress = Math.min(100, Math.round(((currentX - minX) / (maxX - minX)) * 100));
+                                    if (billboardText) billboardText.setAttribute('text', 'value', `Painting: ${progress}%`);
+                                    lastTextUpdateTime = performance.now();
+                                }
+                                
+                                this.processTimeout = setTimeout(processChunk, 0); 
+                                return;
+                            }
+                        }
+                        currentY = minY;
+                        currentX += stepX;
                     }
 
-                    // 將紅線的最後一點連回起點形成閉合
-                    const closedPoints = [...this.points, this.points[0]];
+                    this.isProcessing = false;
+                    this.hitInstancedMesh.count = hitCount;
+                    this.hitInstancedMesh.instanceMatrix.needsUpdate = true;
+
+                    const closedPoints = [...this.points3D, this.points3D[0]];
                     this.lineGeometry.setFromPoints(closedPoints);
 
-                    // 計算面積 (Shoelace Formula)
-                    let area = 0;
-                    for (let i = 0; i < points2d.length; i++) {
-                        let j = (i + 1) % points2d.length; 
-                        area += points2d[i].x * points2d[j].y - points2d[j].x * points2d[i].y;
-                    }
-                    area = Math.abs(area) / 2;
-
-                    const areaCm2 = (area * 10000).toFixed(1);
+                    const areaCm2 = (totalAreaSqMeters * 10000).toFixed(1);
                     
-                    // 更新電腦版 HTML UI
                     const areaUI = document.getElementById('area-display');
                     if (areaUI) {
-                        areaUI.innerHTML = `框選面積: <span class="highlight">${areaCm2} cm²</span>`;
+                        areaUI.innerHTML = `塗層表面積:<br><span class="highlight">${areaCm2} cm²</span>`;
                         areaUI.style.display = 'block';
                     }
 
-                    // 更新場景中的告示牌結果
-                    const billboardText = document.getElementById('billboard-text');
                     if (billboardText) {
-                        billboardText.setAttribute('text', 'value', `Area: ${areaCm2} cm2`);
+                        billboardText.setAttribute('text', 'value', `True 3D Area:\n${areaCm2} cm2`);
                     }
-                } else {
-                    const billboardText = document.getElementById('billboard-text');
-                    if (billboardText) billboardText.setAttribute('text', 'value', 'Ready');
-                }
+                };
+                
+                processChunk(); 
             }
         });
 
@@ -408,29 +552,12 @@
             const scene = document.querySelector('a-scene');
             const desktopCursor = document.getElementById('desktop-cursor');
 
-            // 進入 VR 時自動隱藏電腦版的中央圓點游標
             if (scene) {
-                scene.addEventListener('enter-vr', () => {
-                    if (desktopCursor) desktopCursor.setAttribute('visible', 'false');
-                });
-                
-                // 退出 VR 時恢復顯示
-                scene.addEventListener('exit-vr', () => {
-                    if (desktopCursor) desktopCursor.setAttribute('visible', 'true');
-                });
+                scene.addEventListener('enter-vr', () => { if (desktopCursor) desktopCursor.setAttribute('visible', 'false'); });
+                scene.addEventListener('exit-vr', () => { if (desktopCursor) desktopCursor.setAttribute('visible', 'true'); });
             }
-            
-            if (btnVR) {
-                btnVR.addEventListener('click', () => {
-                    if (scene) scene.enterVR();
-                });
-            }
-
-            if (btnRestart) {
-                btnRestart.addEventListener('click', () => {
-                    window.location.reload();
-                });
-            }
+            if (btnVR) btnVR.addEventListener('click', () => { if (scene) scene.enterVR(); });
+            if (btnRestart) btnRestart.addEventListener('click', () => { window.location.reload(); });
         });
     </script>
 
@@ -451,34 +578,23 @@
             font-size: 24px; border: 2px solid #FFEA00;
             display: none; 
             backdrop-filter: blur(5px);
+            text-align: right;
+            box-shadow: 0 0 15px rgba(255, 234, 0, 0.4);
         }
 
-        .highlight { color: #FFEA00; }
+        .highlight { color: #FFEA00; font-size: 32px; font-weight: bold;}
 
         .a-enter-vr { display: none !important; }
 
         .custom-vr-btn-container {
-            position: absolute;
-            bottom: 30px;
-            left: 50%;
-            transform: translateX(-50%);
-            display: flex;
-            gap: 20px;
-            z-index: 999;
-            pointer-events: auto;
+            position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
+            display: flex; gap: 20px; z-index: 999; pointer-events: auto;
         }
 
         .btn-custom {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 12px 24px;
-            border-radius: 12px;
-            font-size: 18px;
-            font-weight: bold;
-            color: white;
-            cursor: pointer;
-            border: none;
+            display: flex; align-items: center; justify-content: center;
+            padding: 12px 24px; border-radius: 12px; font-size: 18px; font-weight: bold;
+            color: white; cursor: pointer; border: none;
             transition: transform 0.1s, filter 0.2s;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
@@ -491,73 +607,90 @@
 </head>
 <body>
     <div id="ui-layer">
-        <h2>雙模雷射測試 (VR & 電腦)</h2>
-        <p><b>【電腦版操作】</b><br>
-           移動：<span class="highlight">W A S D</span> | 視角：<span class="highlight">點擊畫面鎖定並滑動滑鼠</span><br>
-           抓取：游標對準雷射筆後按 <span class="highlight">E</span> 拿起/放下<br>
-           射擊：拿起後 <span class="highlight">長按滑鼠左鍵</span> 連續發射
+        <h2 style="margin-top: 0; margin-bottom: 15px; font-size: 24px; letter-spacing: 1px;">真實 3D 表面積計算 (Raycasting)</h2>
+        
+        <p style="line-height: 1.7; font-size: 16px; margin: 0 0 15px 0;">
+           <b>【電腦版操作】</b><br>
+           移動：<span style="color: #00FF66; font-weight: bold;">W A S D</span> | 視角：點擊畫面並滑動<br>
+           抓取：對準筆按 <span style="color: #00FF66; font-weight: bold;">E</span><br>
+           測量：拿起後 <span style="color: #00FF66; font-weight: bold;">長按左鍵</span> 框選物體
         </p>
-        <p style="margin-top: 10px; border-top: 1px solid #555; padding-top: 10px;">
-           <b>【VR 設備操作】</b><br>
-           移動：左右手搖桿皆可前後左右平移<br>
-           抓取：用控制器雷射對準筆，按住 <span class="highlight">握把鍵 (Grip)</span> 拿起/放下<br>
-           射擊：拿起後按住 <span class="highlight">板機鍵 (Trigger)</span> 發射
-        </p>
+
+        <div style="border-top: 1px solid #666; padding-top: 15px; font-size: 16px; line-height: 1.7;">
+            <b>提示：</b><br>
+            新的算法可完美計算跨越轉角與曲面的真實表面積。<br>
+            前方設有：<br>
+            <span style="color: #FF4444; font-weight: bold;">格線驗證方塊 (900 cm²/面)</span><br>
+            <span style="color: #44CCFF; font-weight: bold;">實體驗證方塊</span><br>
+            <span style="color: #FF4444; font-weight: bold;">格線圓柱體 (側邊2827, 總4241 cm²)</span><br>
+            <span style="color: #FF99CC; font-weight: bold;">實體圓柱體</span>
+        </div>
     </div>
 
-    <!-- 面積計算顯示面板 (電腦版用) -->
     <div id="area-display">
-        框選面積: <span class="highlight">0 cm²</span>
+        塗層表面積:<br><span class="highlight">0 cm²</span>
     </div>
 
-    <!-- 自訂 VR 與 重新開始 按鈕 -->
     <div class="custom-vr-btn-container">
-        <button id="btn-enter-vr" class="btn-custom btn-vr">
-            <svg style="width:24px;height:24px;margin-right:8px" viewBox="0 0 24 24">
-                <path fill="currentColor" d="M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9M12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,17M12,4.5C7,4.5 2.73,7.61 1,12C2.73,16.39 7,19.5 12,19.5C17,19.5 21.27,16.39 23,12C21.27,7.61 17,4.5 12,4.5Z" />
-            </svg>
-            進入 VR 模式
-        </button>
-        <button id="btn-restart" class="btn-custom btn-restart">
-            <svg style="width:24px;height:24px;margin-right:8px" viewBox="0 0 24 24">
-                <path fill="currentColor" d="M12,18A6,6 0 0,1 6,12C6,11 6.25,10.03 6.7,9.2L5.24,7.74C4.46,8.97 4,10.43 4,12A8,8 0 0,0 12,20V23L16,19L12,15M12,4V1L8,5L12,9V6A6,6 0 0,1 18,12C18,13 17.75,13.97 17.3,14.8L18.76,16.26C19.54,15.03 20,13.57 20,12A8,8 0 0,0 12,4Z" />
-            </svg>
-            重新開始
-        </button>
+        <button id="btn-enter-vr" class="btn-custom btn-vr">進入 VR 模式</button>
+        <button id="btn-restart" class="btn-custom btn-restart">重新開始</button>
     </div>
 
     <a-scene physics="debug: false" webxr="referenceSpaceType: local-floor">
         
+        <a-assets>
+            <img id="grid-texture" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI1MTIiIGhlaWdodD0iNTEyIj48cmVjdCB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgZmlsbD0iI0ZGRkZGRiIvPjxwYXRoIGQ9Ik0wIDBoNTEydjUxMkgweiIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjIiLz48cGF0aCBkPSJNMCA1MS4yaDUxMk0wIDEwMi40aDUxMk0wIDE1My42aDUxMk0wIDIwNC44aDUxMk0wIDI1Nmg1MTJNMCAzMDcuMmg1MTJNMCAzNTguNGg1MTJNMCA0MDkuNmg1MTJNMCA0NjAuOGg1MTJNNTEuMiAwdjUxMk0xMDIuNCAwdjUxMk0xNTMuNiAwdjUxMk0yMDQuOCAwdjUxMk0yNTYgMHY1MTJNMzA3LjIgMHY1MTJNMzU4LjQgMHY1MTJNNDA5LjYgMHY1MTJNNDYwLjggMHY1MTIiIHN0cm9rZT0iI0NDQ0NDQyIgc3Ryb2tlLXdpZHRoPSIzIi8+PC9zdmc+">
+        </a-assets>
+
         <a-light type="ambient" color="#444"></a-light>
         <a-light type="directional" position="1 2 1" intensity="0.8" castShadow="true"></a-light>
         <a-sky color="#ECECEC"></a-sky>
 
-        <!-- 綠色地板 -->
         <a-plane position="0 0 0" rotation="-90 0 0" width="20" height="20" color="#7BC8A4" shadow static-body></a-plane>
 
-        <!-- 大桌子 (中央) -->
-        <a-box position="0 0.5 -1.5" width="2" height="1" depth="1" color="#8B4513" shadow static-body></a-box>
-
-        <!-- 測試桌 (左邊) -->
+        <!-- 延長的大桌子 (中央)，足以放下全部物品 -->
+        <a-box position="1 0.5 -1.5" width="4" height="1" depth="1" color="#8B4513" shadow static-body></a-box>
         <a-box position="-2.5 0.5 -1.5" width="2" height="1" depth="1" color="#5C4033" shadow static-body></a-box>
 
-        <!-- 白色方塊標靶 -->
-        <a-box class="target" position="-0.3 1.25 -1.5" rotation="0 45 0" width="0.5" height="0.5" depth="0.5" color="#FFFFFF" shadow static-body></a-box>
+        <!-- 【1. 真實 3D 驗證方塊】 -->
+        <a-entity position="-0.4 1.25 -1.5" rotation="25 35 0">
+            <a-box class="target" width="0.3" height="0.3" depth="0.3" color="#FFFFFF" 
+                   material="src: #grid-texture; repeat: 1 1;" 
+                   shadow static-body></a-box>
+            <a-text value="Reference Cube\nFace Area: 900 cm2" position="0 0.35 0" align="center" width="1.5" color="#FFF"></a-text>
+        </a-entity>
 
-        <!-- 不規則測試物體 -->
+        <!-- 【2. 自由塗色測試方塊】 -->
+        <a-entity position="0.4 1.25 -1.5" rotation="25 35 0">
+            <a-box class="target" width="0.3" height="0.3" depth="0.3" color="#4CC3D9" shadow static-body></a-box>
+            <a-text value="Target Cube" position="0 0.35 0" align="center" width="1.5" color="#4CC3D9"></a-text>
+        </a-entity>
+        
+        <!-- 【3. 真實 3D 驗證圓柱體】 -->
+        <a-entity position="1.4 1.25 -1.5" rotation="25 -20 15">
+            <a-cylinder class="target" radius="0.15" height="0.3" color="#FFFFFF" 
+                   material="src: #grid-texture; repeat: 2 1;" 
+                   shadow static-body></a-cylinder>
+            <a-text value="Reference Cylinder\nSide: ~2827 cm2\nTotal: ~4241 cm2" position="0 0.4 0" align="center" width="1.5" color="#FFF"></a-text>
+        </a-entity>
+
+        <!-- 【4. 自由塗色測試圓柱體】 -->
+        <a-entity position="2.2 1.25 -1.5" rotation="25 -20 15">
+            <a-cylinder class="target" radius="0.15" height="0.3" color="#FF99CC" shadow static-body></a-cylinder>
+            <a-text value="Target Cylinder" position="0 0.4 0" align="center" width="1.5" color="#FF99CC"></a-text>
+        </a-entity>
+
         <a-dodecahedron class="target" position="-2.5 1.3 -1.5" radius="0.4" color="#FFD700" shadow static-body></a-dodecahedron>
         <a-cylinder class="target" position="-1.7 1.3 -1.5" radius="0.3" height="0.6" color="#FF6347" shadow static-body></a-cylinder>
 
-        <!-- 面積顯示實體告示牌 (放在中央桌子後方) -->
+        <!-- 告示牌 -->
         <a-entity position="0 2 -2.5" rotation="0 0 0">
-            <!-- 黑色告示牌底板 -->
-            <a-plane width="1.8" height="0.6" color="#111" material="opacity: 0.8; transparent: true"></a-plane>
-            <!-- 告示牌文字 -->
-            <a-text id="billboard-text" value="Ready" align="center" width="6" position="0 0 0.01" color="#FFEA00"></a-text>
+            <a-plane width="2" height="0.6" color="#111" material="opacity: 0.9; transparent: true"></a-plane>
+            <a-text id="billboard-text" value="Ready to paint" align="center" width="5" position="0 0 0.01" color="#FFEA00"></a-text>
         </a-entity>
 
         <!-- 雷射筆 -->
-        <a-entity id="laser-pen" class="interactable target"
+        <a-entity id="laser-pen" class="interactable"
             position="0.5 1.05 -1.3" rotation="-90 0 0" 
             geometry="primitive: box; width: 0.08; height: 0.35; depth: 0.08"
             material="opacity: 0; transparent: true; depthWrite: false"
@@ -566,11 +699,9 @@
             <a-cylinder radius="0.03" height="0.3" color="#0000FF" shadow></a-cylinder>
             <a-cone radius-bottom="0.03" radius-top="0.005" height="0.1" color="#FFD700" position="0 0.2 0" shadow></a-cone>
         </a-entity>
-
-        <!-- 玩家本體 -->
+        
+        <!-- 玩家 -->
         <a-entity id="rig" position="0 0 0" hybrid-locomotion>
-            
-            <!-- 攝影機 -->
             <a-camera position="0 1.6 0" look-controls="pointerLockEnabled: true" wasd-controls="enabled: false">
                 <a-entity id="desktop-cursor"
                           cursor="fuse: false; rayOrigin: entity;"
@@ -581,24 +712,13 @@
                 </a-entity>
             </a-camera>
 
-            <!-- 左手 VR 控制器 (本體不旋轉，內部發射器旋轉) -->
             <a-entity id="left-hand" hand-controls="hand: left">
-                <!-- 獨立的射線子實體，向下旋轉 -75 度以平行於中指 -->
-                <a-entity raycaster="objects: .interactable; showLine: true; far: 5; lineColor: cyan; lineOpacity: 0.5"
-                          cursor="rayOrigin: entity"
-                          rotation="-75 0 0">
-                </a-entity>
+                 <a-entity raycaster="objects: .interactable; showLine: true; far: 5; lineColor: cyan; lineOpacity: 0.5" cursor="rayOrigin: entity" rotation="-75 0 0"></a-entity>
             </a-entity>
             
-            <!-- 右手 VR 控制器 (本體不旋轉，內部發射器旋轉) -->
             <a-entity id="right-hand" hand-controls="hand: right">
-                <!-- 獨立的射線子實體，向下旋轉 -75 度以平行於中指 -->
-                <a-entity raycaster="objects: .interactable; showLine: true; far: 5; lineColor: cyan; lineOpacity: 0.5"
-                          cursor="rayOrigin: entity"
-                          rotation="-75 0 0">
-                </a-entity>
+                <a-entity raycaster="objects: .interactable; showLine: true; far: 5; lineColor: cyan; lineOpacity: 0.5" cursor="rayOrigin: entity" rotation="-75 0 0"></a-entity>
             </a-entity>
-
         </a-entity>
         
     </a-scene>
