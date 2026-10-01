@@ -190,16 +190,20 @@
                 
                 hand.object3D.add(this.el.object3D);
                 
-                // 【新增】：抓取時隱藏原本的手掌模型
-                hand.setAttribute('visible', 'false'); 
+                // 【修正】：只精準隱藏「手部的 3D 網格模型」，這樣雷射筆(子物件)就不會跟著消失
+                const handMesh = hand.getObject3D('mesh');
+                if (handMesh) handMesh.visible = false;
                 
                 this.activateLaser();
             },
             
             dropVR: function() {
-                // 【新增】：放下時恢復顯示手掌模型
+                this.el.setAttribute('dynamic-body', 'shape: box; mass: 0.5; linearDamping: 0.8; angularDamping: 0.8');
+                
+                // 【修正】：放下時，將手的 3D 網格模型重新顯示出來
                 if (this.grabbedBy) {
-                    this.grabbedBy.setAttribute('visible', 'true');
+                    const handMesh = this.grabbedBy.getObject3D('mesh');
+                    if (handMesh) handMesh.visible = true;
                 }
 
                 this.isGrabbedVR = false;
@@ -208,7 +212,6 @@
                 this.el.sceneEl.object3D.add(this.el.object3D);
                 this.el.setAttribute('position', this.originalPosition);
                 this.el.setAttribute('rotation', this.originalRotation); 
-                this.el.setAttribute('dynamic-body', 'shape: box; mass: 0.5; linearDamping: 0.8; angularDamping: 0.8');
                 this.deactivateLaser();
             },
 
