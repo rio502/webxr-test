@@ -209,9 +209,19 @@
             onHoverEnter: function () {
                 if (this.isGrabbedDesktop || this.isGrabbedVR) return;
                 this.isHovered = true;
+                const parts = this.el.querySelectorAll('a-cylinder, a-cone');
+                parts.forEach(part => {
+                    const color = part.getAttribute('color');
+                    part.setAttribute('material', `color: ${color}; emissive: ${color}; emissiveIntensity: 0.6`);
+                });
             },
             onHoverLeave: function () {
                 this.isHovered = false;
+                const parts = this.el.querySelectorAll('a-cylinder, a-cone');
+                parts.forEach(part => {
+                    const color = part.getAttribute('color');
+                    part.setAttribute('material', `color: ${color}; emissive: #000; emissiveIntensity: 0`);
+                });
             },
             onKeyDown: function (e) {
                 if (e.key.toLowerCase() === 'e') {
@@ -227,6 +237,11 @@
 
             pickupDesktop: function () {
                 this.isGrabbedDesktop = true; this.isHovered = false;
+                const parts = this.el.querySelectorAll('a-cylinder, a-cone');
+                parts.forEach(part => {
+                    const color = part.getAttribute('color');
+                    part.setAttribute('material', `color: ${color}; emissive: #000; emissiveIntensity: 0`);
+                });
                 this.el.removeAttribute('dynamic-body');
                 this.activateLaser();
             },
@@ -625,9 +640,6 @@
         
         <a-assets>
             <img id="grid-texture" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI1MTIiIGhlaWdodD0iNTEyIj48cmVjdCB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgZmlsbD0iI0ZGRkZGRiIvPjxwYXRoIGQ9Ik0wIDBoNTEydjUxMkgweiIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjIiLz48cGF0aCBkPSJNMCA1MS4yaDUxMk0wIDEwMi40aDUxMk0wIDE1My42aDUxMk0wIDIwNC44aDUxMk0wIDI1Nmg1MTJNMCAzMDcuMmg1MTJNMCAzNTguNGg1MTJNMCA0MDkuNmg1MTJNMCA0NjAuOGg1MTJNNTEuMiAwdjUxMk0xMDIuNCAwdjUxMk0xNTMuNiAwdjUxMk0yMDQuOCAwdjUxMk0yNTYgMHY1MTJNMzA3LjIgMHY1MTJNMzU4LjQgMHY1MTJNNDA5LjYgMHY1MTJNNDYwLjggMHY1MTIiIHN0cm9rZT0iI0NDQ0NDQyIgc3Ryb2tlLXdpZHRoPSIzIi8+PC9zdmc+">
-            
-            <!-- 【修改】預載你的專屬雷射筆模型，使用絕對路徑強迫讀取 -->
-            <a-asset-item id="pen-model" src="https://rio502.github.io/webxr-test/assets/LaserPointer.glb"></a-asset-item>
         </a-assets>
 
         <a-light type="ambient" color="#444"></a-light>
@@ -677,16 +689,15 @@
             <a-text id="billboard-text" value="Ready to paint" align="center" width="5" position="0 0 0.01" color="#FFEA00"></a-text>
         </a-entity>
 
-        <!-- 【修改】套用自訂模型的雷射筆 (含隱形碰撞箱與縮放) -->
+        <!-- 雷射筆 -->
         <a-entity id="laser-pen" class="interactable"
             position="0.5 1.05 -1.3" rotation="-90 0 0" 
             geometry="primitive: box; width: 0.08; height: 0.35; depth: 0.08"
             material="opacity: 0; transparent: true; depthWrite: false"
             dynamic-body="shape: box; mass: 0.5; linearDamping: 0.8; angularDamping: 0.8"
             laser-pen-behavior>
-            
-            <!-- 你的模型放在這裡。scale="0.05 0.05 0.05" 是為了解決模型過大的問題 -->
-            <a-entity gltf-model="#pen-model" scale="0.05 0.05 0.05" position="0 0 0" rotation="0 0 0"></a-entity>
+            <a-cylinder radius="0.03" height="0.3" color="#0000FF" shadow></a-cylinder>
+            <a-cone radius-bottom="0.03" radius-top="0.005" height="0.1" color="#FFD700" position="0 0.2 0" shadow></a-cone>
         </a-entity>
         
         <!-- 玩家 -->
