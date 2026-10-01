@@ -189,10 +189,19 @@
                 this.el.setAttribute('rotation', '-135 0 0'); 
                 
                 hand.object3D.add(this.el.object3D);
+                
+                // 【新增】：抓取時隱藏原本的手掌模型
+                hand.setAttribute('visible', 'false'); 
+                
                 this.activateLaser();
             },
             
             dropVR: function() {
+                // 【新增】：放下時恢復顯示手掌模型
+                if (this.grabbedBy) {
+                    this.grabbedBy.setAttribute('visible', 'true');
+                }
+
                 this.isGrabbedVR = false;
                 this.isFiring = false;
                 this.grabbedBy = null;
