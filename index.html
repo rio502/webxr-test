@@ -188,6 +188,13 @@
                 const handMesh = hand.getObject3D('mesh');
                 if (handMesh) handMesh.visible = false;
                 
+                // 【新增】抓取雷射筆時，關閉手把預設的青色抓取射線
+                const handRay = hand.querySelector('.hand-ray');
+                if (handRay) {
+                    handRay.setAttribute('raycaster', 'showLine', false);
+                    handRay.setAttribute('raycaster', 'enabled', false);
+                }
+                
                 this.activateLaser();
             },
             
@@ -196,6 +203,13 @@
                 if (this.grabbedBy) {
                     const handMesh = this.grabbedBy.getObject3D('mesh');
                     if (handMesh) handMesh.visible = true;
+                    
+                    // 【新增】放下雷射筆時，恢復手把預設的青色抓取射線
+                    const handRay = this.grabbedBy.querySelector('.hand-ray');
+                    if (handRay) {
+                        handRay.setAttribute('raycaster', 'showLine', true);
+                        handRay.setAttribute('raycaster', 'enabled', true);
+                    }
                 }
 
                 this.isGrabbedVR = false; this.isFiring = false; this.grabbedBy = null;
@@ -626,7 +640,6 @@
         <a-assets>
             <img id="grid-texture" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI1MTIiIGhlaWdodD0iNTEyIj48cmVjdCB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgZmlsbD0iI0ZGRkZGRiIvPjxwYXRoIGQ9Ik0wIDBoNTEydjUxMkgweiIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjIiLz48cGF0aCBkPSJNMCA1MS4yaDUxMk0wIDEwMi40aDUxMk0wIDE1My42aDUxMk0wIDIwNC44aDUxMk0wIDI1Nmg1MTJNMCAzMDcuMmg1MTJNMCAzNTguNGg1MTJNMCA0MDkuNmg1MTJNMCA0NjAuOGg1MTJNNTEuMiAwdjUxMk0xMDIuNCAwdjUxMk0xNTMuNiAwdjUxMk0yMDQuOCAwdjUxMk0yNTYgMHY1MTJNMzA3LjIgMHY1MTJNMzU4LjQgMHY1MTJNNDA5LjYgMHY1MTJNNDYwLjggMHY1MTIiIHN0cm9rZT0iI0NDQ0NDQyIgc3Ryb2tlLXdpZHRoPSIzIi8+PC9zdmc+">
             
-            <!-- 【新增】預載你的 3D 模型 (使用絕對路徑) -->
             <a-asset-item id="pen-model" src="https://rio502.github.io/webxr-test/assets/LaserPointer.glb"></a-asset-item>
         </a-assets>
 
@@ -677,7 +690,7 @@
             <a-text id="billboard-text" value="Ready to paint" align="center" width="5" position="0 0 0.01" color="#FFEA00"></a-text>
         </a-entity>
 
-        <!-- 【修改】套用自訂 3D 模型的雷射筆 (含隱形碰撞箱，scale 設為 1 1 1) -->
+        <!-- 雷射筆 -->
         <a-entity id="laser-pen" class="interactable"
             position="0.5 1.05 -1.3" rotation="-90 0 0" 
             geometry="primitive: box; width: 0.08; height: 0.35; depth: 0.08"
@@ -685,7 +698,6 @@
             dynamic-body="shape: box; mass: 0.5; linearDamping: 0.8; angularDamping: 0.8"
             laser-pen-behavior>
             
-            <!-- 你的 3D 模型，尺寸在 Blender 已經調好，這裡 scale 用 1 1 1 -->
             <a-entity gltf-model="#pen-model" scale="1 1 1" position="0 0 0" rotation="90 0 0"></a-entity>
         </a-entity>
         
@@ -701,12 +713,13 @@
                 </a-entity>
             </a-camera>
 
+            <!-- 【修改】替手把射線加上 class="hand-ray"，並將角度 -75 改為直指的 -45 -->
             <a-entity id="left-hand" hand-controls="hand: left">
-                 <a-entity raycaster="objects: .interactable; showLine: true; far: 5; lineColor: cyan; lineOpacity: 0.5" cursor="rayOrigin: entity" rotation="-75 0 0"></a-entity>
+                 <a-entity class="hand-ray" raycaster="objects: .interactable; showLine: true; far: 5; lineColor: cyan; lineOpacity: 0.5" cursor="rayOrigin: entity" rotation="-45 0 0"></a-entity>
             </a-entity>
             
             <a-entity id="right-hand" hand-controls="hand: right">
-                <a-entity raycaster="objects: .interactable; showLine: true; far: 5; lineColor: cyan; lineOpacity: 0.5" cursor="rayOrigin: entity" rotation="-75 0 0"></a-entity>
+                <a-entity class="hand-ray" raycaster="objects: .interactable; showLine: true; far: 5; lineColor: cyan; lineOpacity: 0.5" cursor="rayOrigin: entity" rotation="-45 0 0"></a-entity>
             </a-entity>
         </a-entity>
         
