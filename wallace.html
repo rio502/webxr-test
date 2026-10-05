@@ -102,6 +102,10 @@
             <a-text id="billboard-text" value="Ready to paint" align="center" width="5" position="0 0 0.01" color="#FFEA00"></a-text>
         </a-entity>
 
+        <!-- 【測試用】將雙手模型放在桌上展示 -->
+        <a-entity gltf-model="#hand-l-model" position="-0.3 1.3 -1.2" scale="1 1 1" rotation="0 0 0"></a-entity>
+        <a-entity gltf-model="#hand-r-model" position="0.3 1.3 -1.2" scale="1 1 1" rotation="0 0 0"></a-entity>
+
         <!-- 雷射筆 -->
         <a-entity id="laser-pen" class="interactable"
             position="0.5 1.05 -1.3" rotation="-90 0 0" 
@@ -124,17 +128,15 @@
                 </a-entity>
             </a-camera>
 
-            <!-- 【修改】左手控制器：加入 model: false 關閉預設，並掛載自訂模型 -->
+            <!-- 左手控制器：暫時將自訂模型註解掉，進行除錯 -->
             <a-entity id="left-hand" hand-controls="hand: left; model: false">
-                 <!-- 自訂左手模型 -->
-                 <a-entity id="custom-hand-l" gltf-model="#hand-l-model"></a-entity>
+                 <!-- <a-entity id="custom-hand-l" gltf-model="#hand-l-model"></a-entity> -->
                  <a-entity class="hand-ray" raycaster="objects: .interactable; showLine: true; far: 5; lineColor: cyan; lineOpacity: 0.5" cursor="rayOrigin: entity" rotation="-45 0 0"></a-entity>
             </a-entity>
             
-            <!-- 【修改】右手控制器：加入 model: false 關閉預設，並掛載自訂模型 -->
+            <!-- 右手控制器：暫時將自訂模型註解掉，進行除錯 -->
             <a-entity id="right-hand" hand-controls="hand: right; model: false">
-                <!-- 自訂右手模型 -->
-                <a-entity id="custom-hand-r" gltf-model="#hand-r-model"></a-entity>
+                <!-- <a-entity id="custom-hand-r" gltf-model="#hand-r-model"></a-entity> -->
                 <a-entity class="hand-ray" raycaster="objects: .interactable; showLine: true; far: 5; lineColor: cyan; lineOpacity: 0.5" cursor="rayOrigin: entity" rotation="-45 0 0"></a-entity>
             </a-entity>
         </a-entity>
