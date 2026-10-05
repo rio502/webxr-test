@@ -57,7 +57,7 @@
             <img id="grid-texture" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI1MTIiIGhlaWdodD0iNTEyIj48cmVjdCB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgZmlsbD0iI0ZGRkZGRiIvPjxwYXRoIGQ9Ik0wIDBoNTEydjUxMkgweiIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjIiLz48cGF0aCBkPSJNMCA1MS4yaDUxMk0wIDEwMi40aDUxMk0wIDE1My42aDUxMk0wIDIwNC44aDUxMk0wIDI1Nmg1MTJNMCAzMDcuMmg1MTJNMCAzNTguNGg1MTJNMCA0MDkuNmg1MTJNMCA0NjAuOGg1MTJNNTEuMiAwdjUxMk0xMDIuNCAwdjUxMk0xNTMuNiAwdjUxMk0yMDQuOCAwdjUxMk0yNTYgMHY1MTJNMzA3LjIgMHY1MTJNMzU4LjQgMHY1MTJNNDA5LjYgMHY1MTJNNDYwLjggMHY1MTIiIHN0cm9rZT0iI0NDQ0NDQyIgc3Ryb2tlLXdpZHRoPSIzIi8+PC9zdmc+">
             <a-asset-item id="pen-model" src="https://rio502.github.io/webxr-test/assets/LaserPointer.glb"></a-asset-item>
             
-            <!-- 【新增】載入自訂左右手套模型 -->
+            <!-- 載入自訂左右手套模型 -->
             <a-asset-item id="hand-l-model" src="assets/Hand_L.glb"></a-asset-item>
             <a-asset-item id="hand-r-model" src="assets/Hand_R.glb"></a-asset-item>
         </a-assets>
@@ -102,10 +102,6 @@
             <a-text id="billboard-text" value="Ready to paint" align="center" width="5" position="0 0 0.01" color="#FFEA00"></a-text>
         </a-entity>
 
-        <!-- 【測試用】將雙手模型放在桌上展示 -->
-        <a-entity gltf-model="#hand-l-model" position="-0.3 1.3 -1.2" scale="1 1 1" rotation="0 0 0"></a-entity>
-        <a-entity gltf-model="#hand-r-model" position="0.3 1.3 -1.2" scale="1 1 1" rotation="0 0 0"></a-entity>
-
         <!-- 雷射筆 -->
         <a-entity id="laser-pen" class="interactable"
             position="0.5 1.05 -1.3" rotation="-90 0 0" 
@@ -128,15 +124,17 @@
                 </a-entity>
             </a-camera>
 
-            <!-- 左手控制器：暫時將自訂模型註解掉，進行除錯 -->
-            <a-entity id="left-hand" hand-controls="hand: left; model: false">
-                 <!-- <a-entity id="custom-hand-l" gltf-model="#hand-l-model"></a-entity> -->
+            <!-- 【成功解法】左手：改用 tracked-controls，徹底避開動畫打架問題 -->
+            <a-entity id="left-hand" tracked-controls="hand: left">
+                 <!-- 你的專屬左手 -->
+                 <a-entity id="custom-hand-l" gltf-model="#hand-l-model"></a-entity>
                  <a-entity class="hand-ray" raycaster="objects: .interactable; showLine: true; far: 5; lineColor: cyan; lineOpacity: 0.5" cursor="rayOrigin: entity" rotation="-45 0 0"></a-entity>
             </a-entity>
             
-            <!-- 右手控制器：暫時將自訂模型註解掉，進行除錯 -->
-            <a-entity id="right-hand" hand-controls="hand: right; model: false">
-                <!-- <a-entity id="custom-hand-r" gltf-model="#hand-r-model"></a-entity> -->
+            <!-- 【成功解法】右手：改用 tracked-controls -->
+            <a-entity id="right-hand" tracked-controls="hand: right">
+                <!-- 你的專屬右手 -->
+                <a-entity id="custom-hand-r" gltf-model="#hand-r-model"></a-entity>
                 <a-entity class="hand-ray" raycaster="objects: .interactable; showLine: true; far: 5; lineColor: cyan; lineOpacity: 0.5" cursor="rayOrigin: entity" rotation="-45 0 0"></a-entity>
             </a-entity>
         </a-entity>
