@@ -1,3 +1,14 @@
+// 【新增】模型攔截器：強制將預設的 hand-controls 替換成自訂手套模型
+AFRAME.registerComponent('override-hand-model', {
+    schema: { type: 'asset' },
+    dependencies: ['hand-controls'],
+    init: function () {
+        // 等 hand-controls 設定好後，強制把模型網址換成我們自己的
+        this.el.setAttribute('gltf-model', this.data);
+    }
+});
+
+// 原本的雷射筆與抓取邏輯
 AFRAME.registerComponent('laser-pen-behavior', {
     init: function () {
         this.isGrabbedVR = false;
@@ -59,7 +70,8 @@ AFRAME.registerComponent('laser-pen-behavior', {
             this.lineMaterial = new THREE.LineBasicMaterial({ 
                 color: 0xff0000, 
                 depthTest: false, 
-                depthWrite: false
+                depthWrite: false,
+                visible: false  // 直接將紅線隱藏
             });
             this.lineGeometry = new THREE.BufferGeometry();
             this.lineMesh = new THREE.Line(this.lineGeometry, this.lineMaterial);
@@ -116,7 +128,7 @@ AFRAME.registerComponent('laser-pen-behavior', {
         const handMesh = hand.getObject3D('mesh');
         if (handMesh) handMesh.visible = false;
         
-        // 【新增】抓取雷射筆時，關閉手把預設的青色抓取射線
+        // 抓取雷射筆時，關閉手把預設的青色抓取射線
         const handRay = hand.querySelector('.hand-ray');
         if (handRay) {
             handRay.setAttribute('raycaster', 'showLine', false);
@@ -132,7 +144,7 @@ AFRAME.registerComponent('laser-pen-behavior', {
             const handMesh = this.grabbedBy.getObject3D('mesh');
             if (handMesh) handMesh.visible = true;
             
-            // 【新增】放下雷射筆時，恢復手把預設的青色抓取射線
+            // 放下雷射筆時，恢復手把預設的青色抓取射線
             const handRay = this.grabbedBy.querySelector('.hand-ray');
             if (handRay) {
                 handRay.setAttribute('raycaster', 'showLine', true);
@@ -285,7 +297,7 @@ AFRAME.registerComponent('laser-pen-behavior', {
         minX -= marginX; maxX += marginX;
         minY -= marginY; maxY += marginY;
 
-        const resolution = 50; 
+        const resolution = 15; 
         const stepX = (maxX - minX) / resolution;
         const stepY = (maxY - minY) / resolution;
         if (stepX <= 0 || stepY <= 0) return;
@@ -366,7 +378,7 @@ AFRAME.registerComponent('laser-pen-behavior', {
         minX -= marginX; maxX += marginX;
         minY -= marginY; maxY += marginY;
 
-        const resolution = 120; 
+        const resolution = 40; 
         const stepX = (maxX - minX) / resolution;
         const stepY = (maxY - minY) / resolution;
         if (stepX <= 0 || stepY <= 0) return;
