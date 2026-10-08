@@ -1,14 +1,29 @@
-// 【新增】模型攔截器：強制將預設的 hand-controls 替換成自訂手套模型
+// 【修改版】模型攔截器：不只換模型，還親自接管動畫控制！
 AFRAME.registerComponent('override-hand-model', {
     schema: { type: 'asset' },
     dependencies: ['hand-controls'],
     init: function () {
-        // 等 hand-controls 設定好後，強制把模型網址換成我們自己的
+        // 1. 強制把模型換成我們的自訂手套
         this.el.setAttribute('gltf-model', this.data);
+        
+        // 2. 加上 animation-mixer，預設播放 Open (放鬆張開)，設定 0.2 秒平滑漸變
+        this.el.setAttribute('animation-mixer', 'clip: Open; crossFadeDuration: 0.2');
+
+        // 3. 監聽 VR 搖桿按鈕，自己控制動畫切換
+        const playFist = () => this.el.setAttribute('animation-mixer', 'clip: Fist; crossFadeDuration: 0.2');
+        const playOpen = () => this.el.setAttribute('animation-mixer', 'clip: Open; crossFadeDuration: 0.2');
+
+        // 側邊抓取鍵 (Grip)
+        this.el.addEventListener('gripdown', playFist);
+        this.el.addEventListener('gripup', playOpen);
+        
+        // 板機鍵 (Trigger) 雙重保險
+        this.el.addEventListener('triggerdown', playFist);
+        this.el.addEventListener('triggerup', playOpen);
     }
 });
 
-// 原本的雷射筆與抓取邏輯
+// 原本的雷射筆與抓取邏輯 (維持不變)
 AFRAME.registerComponent('laser-pen-behavior', {
     init: function () {
         this.isGrabbedVR = false;
@@ -66,12 +81,11 @@ AFRAME.registerComponent('laser-pen-behavior', {
 
             this.points3D = []; 
             
-            // 邊界紅線材質
             this.lineMaterial = new THREE.LineBasicMaterial({ 
                 color: 0xff0000, 
                 depthTest: false, 
                 depthWrite: false,
-                visible: false  // 直接將紅線隱藏
+                visible: false
             });
             this.lineGeometry = new THREE.BufferGeometry();
             this.lineMesh = new THREE.Line(this.lineGeometry, this.lineMaterial);
@@ -79,7 +93,6 @@ AFRAME.registerComponent('laser-pen-behavior', {
             
             this.dummy = new THREE.Object3D(); 
             
-            // 預覽塗料 (黃色)
             this.maxPreviewHits = 10000; 
             const previewGeo = new THREE.BoxGeometry(1, 1, 0.002); 
             const previewMat = new THREE.MeshBasicMaterial({ 
@@ -89,7 +102,6 @@ AFRAME.registerComponent('laser-pen-behavior', {
             this.previewInstancedMesh.count = 0; 
             this.previewInstancedMesh.renderOrder = 997;
 
-            // 最終塗料 (綠色)
             this.maxHits = 40000; 
             const paintGeo = new THREE.BoxGeometry(1, 1, 0.002); 
             const paintMat = new THREE.MeshBasicMaterial({ 
@@ -117,18 +129,14 @@ AFRAME.registerComponent('laser-pen-behavior', {
         this.isGrabbedVR = true; this.grabbedBy = hand; this.isHovered = false;
         this.el.removeAttribute('dynamic-body');
         
-        // 位置：移到控制器上方偏前
         this.el.setAttribute('position', '0 0.02 -0.06'); 
-        // 角度：-135 剛好順著食指的方向
         this.el.setAttribute('rotation', '-135 0 0'); 
         
         hand.object3D.add(this.el.object3D);
         
-        // 【隱藏替換法】抓取時隱藏原本的手掌模型
         const handMesh = hand.getObject3D('mesh');
         if (handMesh) handMesh.visible = false;
         
-        // 抓取雷射筆時，關閉手把預設的青色抓取射線
         const handRay = hand.querySelector('.hand-ray');
         if (handRay) {
             handRay.setAttribute('raycaster', 'showLine', false);
@@ -139,12 +147,10 @@ AFRAME.registerComponent('laser-pen-behavior', {
     },
     
     dropVR: function() {
-        // 【隱藏替換法】放下時恢復顯示手掌模型
         if (this.grabbedBy) {
             const handMesh = this.grabbedBy.getObject3D('mesh');
             if (handMesh) handMesh.visible = true;
             
-            // 放下雷射筆時，恢復手把預設的青色抓取射線
             const handRay = this.grabbedBy.querySelector('.hand-ray');
             if (handRay) {
                 handRay.setAttribute('raycaster', 'showLine', true);
