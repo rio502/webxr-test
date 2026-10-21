@@ -4,124 +4,299 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>真實 3D 表面積計算 (無縫塗色版)</title>
-    
-    <!-- 引入外部樣式表 -->
+
     <link rel="stylesheet" href="css/style.css">
 
-    <!-- 引入 A-Frame 與相關套件 -->
-    <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
+    <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-physics-system@v4.2.2/dist/aframe-physics-system.min.js"></script>
     <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-extras@7.0.0/dist/aframe-extras.min.js"></script>
     <script src="https://unpkg.com/super-hands@3.0.3/dist/super-hands.min.js"></script>
 
-    <!-- 引入拆分的 A-Frame 元件 -->
+    <script>
+        AFRAME.registerComponent('raycast-optimized', {
+            init: function () {
+                this.el.addEventListener('model-loaded', () => {
+                    const obj = this.el.getObject3D('mesh');
+                    if (obj) {
+                        obj.traverse((child) => {
+                            if (child.isMesh) {
+                                child.geometry.computeBoundingBox();
+                                child.geometry.computeBoundingSphere();
+                            }
+                        });
+                    }
+                });
+            }
+        });
+    </script>
+
+    <script>
+        AFRAME.registerComponent('hand-model-offset', {
+            schema: { x: { default: 0 } },
+            tick: function () {
+                if (this.done) return;
+                const children = this.el.object3D.children;
+                for (let i = 0; i < children.length; i++) {
+                    const child = children[i];
+                    if (child.name === 'Armature') {
+                        child.rotation.x += THREE.MathUtils.degToRad(this.data.x);
+                        this.done = true; 
+                        break;
+                    }
+                }
+            }
+        });
+    </script>
+
+    <!-- 🌟 VR 首頁與場景切換控制器 -->
+    <script>
+        AFRAME.registerComponent('vr-scene-manager', {
+            init: function() {
+                const startBtn = document.getElementById('vr-start-btn');
+                const lobbyScene = document.getElementById('lobby-scene');
+                const mainScene = document.getElementById('main-scene');
+                const sky = document.getElementById('environment-sky');
+                const ambientLight = document.getElementById('ambient-light');
+                const bgmPlayer = document.getElementById('bgm-player');
+                const hudLoadingText = document.getElementById('hud-loading-text');
+                const leftHand = document.getElementById('left-hand');
+                const rightHand = document.getElementById('right-hand');
+                const pen = document.getElementById('laser-pen');
+                
+                // --- 1. 點擊 START 進入主場景 ---
+                startBtn.addEventListener('mousedown', () => {
+                    lobbyScene.setAttribute('visible', 'false');
+                    lobbyScene.setAttribute('position', '0 -999 0');
+                    mainScene.setAttribute('visible', 'true');
+                    
+                    if (pen) {
+                        pen.setAttribute('visible', 'true');
+                        pen.object3D.visible = true;
+                    }
+
+                    sky.setAttribute('color', '#FFFFFF');
+                    ambientLight.setAttribute('color', '#CCC');
+                    
+                    if (bgmPlayer && bgmPlayer.components && bgmPlayer.components.sound) {
+                        bgmPlayer.components.sound.playSound();
+                    }
+                });
+
+                startBtn.addEventListener('mouseenter', () => {
+                    startBtn.setAttribute('material', 'color', '#666666'); 
+                });
+                startBtn.addEventListener('mouseleave', () => {
+                    startBtn.setAttribute('material', 'color', '#FFFFFF'); 
+                });
+
+                // --- 2. 長按 X 鍵退出 ---
+                let progressInterval;
+                let holdTime = 0;
+                const requiredHoldTime = 1500;
+
+                if (leftHand) {
+                    leftHand.addEventListener('xbuttondown', () => {
+                        holdTime = 0;
+                        if(hudLoadingText) hudLoadingText.setAttribute('value', 'Returning... 0%');
+
+                        progressInterval = setInterval(() => {
+                            holdTime += 50;
+                            let percent = Math.min(100, Math.floor((holdTime / requiredHoldTime) * 100));
+                            if(hudLoadingText) hudLoadingText.setAttribute('value', `Returning... ${percent}%`);
+                            
+                            if (holdTime >= requiredHoldTime) {
+                                clearInterval(progressInterval);
+                                executeReturn();
+                            }
+                        }, 50);
+                    });
+
+                    leftHand.addEventListener('xbuttonup', () => {
+                        clearInterval(progressInterval);
+                        if (holdTime < requiredHoldTime) {
+                            if(hudLoadingText) hudLoadingText.setAttribute('value', '');
+                        }
+                    });
+                }
+
+                // --- 3. 終極退出與還原程序 ---
+                function executeReturn() {
+                    mainScene.setAttribute('visible', 'false');
+                    sky.setAttribute('color', '#E8E8ED');
+                    ambientLight.setAttribute('color', '#FFFFFF');
+
+                    lobbyScene.setAttribute('visible', 'true');
+                    lobbyScene.setAttribute('position', '0 0 0');
+                    
+                    if (bgmPlayer && bgmPlayer.components && bgmPlayer.components.sound) {
+                        bgmPlayer.components.sound.stopSound();
+                    }
+                    const areaUI = document.getElementById('area-display');
+                    if (areaUI) areaUI.style.display = 'none';
+                    
+                    const billboardText = document.getElementById('billboard-text');
+                    if (billboardText) billboardText.setAttribute('value', 'Ready to scan');
+
+                    if(hudLoadingText) hudLoadingText.setAttribute('value', '');
+
+                    if (pen) {
+                        const penComp = pen.components['laser-pen-behavior'];
+                        if (penComp) {
+                            if (penComp.isGrabbedVR) penComp.dropVR();
+                            if (penComp.isGrabbedDesktop) penComp.dropDesktop();
+                            
+                            penComp.isGrabbedVR = false;
+                            penComp.isGrabbedDesktop = false;
+                            penComp.isFiring = false;
+                            penComp.wasFiring = false;
+                            penComp.grabbedBy = null;
+                            
+                            if (penComp.deactivateLaser) penComp.deactivateLaser();
+                            if (penComp.clearPreviewPoints) penComp.clearPreviewPoints();
+                            if (penComp.hitInstancedMesh) {
+                                penComp.hitInstancedMesh.count = 0;
+                                penComp.hitInstancedMesh.instanceMatrix.needsUpdate = true;
+                            }
+                        }
+
+                        mainScene.object3D.add(pen.object3D);
+
+                        pen.setAttribute('visible', 'false');
+                        pen.object3D.visible = false;
+
+                        pen.setAttribute('position', '1 1.04 -1.5');
+                        pen.setAttribute('rotation', '-90 0 0');
+
+                        if (pen.body) {
+                            pen.body.position.set(1, 1.04, -1.5);
+                            pen.body.velocity.set(0, 0, 0);
+                            pen.body.angularVelocity.set(0, 0, 0);
+                            const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI/2, 0, 0));
+                            pen.body.quaternion.set(q.x, q.y, q.z, q.w);
+                        }
+                    }
+
+                    [leftHand, rightHand].forEach(hand => {
+                        if (hand) {
+                            const mesh = hand.getObject3D('mesh');
+                            if (mesh) mesh.visible = true;
+                            const ray = hand.querySelector('.hand-ray');
+                            if (ray) {
+                                ray.setAttribute('raycaster', 'showLine', true);
+                                ray.setAttribute('raycaster', 'enabled', true);
+                            }
+                        }
+                    });
+                }
+            }
+        });
+    </script>
+
     <script src="js/components/hybrid-locomotion.js"></script>
     <script src="js/components/laser-pen-behavior.js"></script>
-    
-    <!-- 引入主程式邏輯 -->
     <script src="js/main.js" defer></script>
 </head>
 <body>
+
     <div id="ui-layer">
         <h2 style="margin-top: 0; margin-bottom: 15px; font-size: 24px; letter-spacing: 1px;">真實 3D 表面積計算 (Raycasting)</h2>
-        
         <p style="line-height: 1.7; font-size: 16px; margin: 0 0 15px 0;">
            <b>【電腦版操作】</b><br>
            移動：<span style="color: #00FF66; font-weight: bold;">W A S D</span> | 視角：點擊畫面並滑動<br>
            抓取：對準筆按 <span style="color: #00FF66; font-weight: bold;">E</span><br>
            測量：拿起後 <span style="color: #00FF66; font-weight: bold;">長按左鍵</span> 框選物體
         </p>
-
-        <div style="border-top: 1px solid #666; padding-top: 15px; font-size: 16px; line-height: 1.7;">
-            <b>提示：</b><br>
-            新的算法可完美計算跨越轉角與曲面的真實表面積。<br>
-            前方設有：<br>
-            <span style="color: #FF4444; font-weight: bold;">格線驗證方塊 (900 cm²/面)</span><br>
-            <span style="color: #44CCFF; font-weight: bold;">實體驗證方塊</span><br>
-            <span style="color: #FF4444; font-weight: bold;">格線圓柱體 (側邊2827, 總4241 cm²)</span><br>
-            <span style="color: #FF99CC; font-weight: bold;">實體圓柱體</span>
-        </div>
     </div>
 
-    <div id="area-display">
-        塗層表面積:<br><span class="highlight">0 cm²</span>
-    </div>
+    <div id="area-display">塗層表面積:<br><span class="highlight">0 cm²</span></div>
 
     <div class="custom-vr-btn-container">
         <button id="btn-enter-vr" class="btn-custom btn-vr">進入 VR 模式</button>
         <button id="btn-restart" class="btn-custom btn-restart">重新開始</button>
     </div>
 
-    <a-scene physics="debug: false" webxr="referenceSpaceType: local-floor">
+    <a-scene physics="debug: false" webxr="referenceSpaceType: local-floor" renderer="colorManagement: true;">
         <a-assets>
-            <img id="grid-texture" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI1MTIiIGhlaWdodD0iNTEyIj48cmVjdCB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgZmlsbD0iI0ZGRkZGRiIvPjxwYXRoIGQ9Ik0wIDBoNTEydjUxMkgweiIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjIiLz48cGF0aCBkPSJNMCA1MS4yaDUxMk0wIDEwMi40aDUxMk0wIDE1My42aDUxMk0wIDIwNC44aDUxMk0wIDI1Nmg1MTJNMCAzMDcuMmg1MTJNMCAzNTguNGg1MTJNMCA0MDkuNmg1MTJNMCA0NjAuOGg1MTJNNTEuMiAwdjUxMk0xMDIuNCAwdjUxMk0xNTMuNiAwdjUxMk0yMDQuOCAwdjUxMk0yNTYgMHY1MTJNMzA3LjIgMHY1MTJNMzU4LjQgMHY1MTJNNDA5LjYgMHY1MTJNNDYwLjggMHY1MTIiIHN0cm9rZT0iI0NDQ0NDQyIgc3Ryb2tlLXdpZHRoPSIzIi8+PC9zdmc+">
-            <a-asset-item id="pen-model" src="https://rio502.github.io/webxr-test/assets/LaserPointer.glb"></a-asset-item>
-            
-            <!-- 載入新的人體模型 -->
+            <img id="grid-texture" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI1MTIiIGhlaWdodD0iNTEyIj48cmVjdCB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgZmlsbD0iI0ZGRkZGRiIvPjxwYXRoIGQ9Ik0wIDBoNTEydjUxMkgweiIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjIiLz48cGF0aCBkPSJNMCA1MS4yaDUxMk0wIDEwMi40aDUxMk0wIDE1My42aDUxMk0wIDIwNC44aDUxMk0wIDI1Nmg1MTJNMCAzMDcuMmg1MTJNMCAzNTguNGg1MTJNMCA4MDkuNmg1MTJNMCA0NjAuOGg1MTJNNTEuMiAwdjUxMk0xMDIuNCAwdjUxMk0xNTMuNiAwdjUxMk0yMDQuOCAwdjUxMk0yNTYgMHY1MTJNMzA3LjIgMHY1MTJNMzU4LjQgMHY1MTJNNDA5LjYgMHY1MTJNNDYwLjggMHY1MTIiIHN0cm9rZT0iI0NDQ0NDQyIgc3Ryb2tlLXdpZHRoPSIzIi8+PC9zdmc+">
+            <a-asset-item id="pen-model" src="assets/LaserPointer.glb"></a-asset-item>
             <a-asset-item id="human-body-model" src="assets/human_body.glb"></a-asset-item>
             
-            <!-- 【新增】載入自訂左右手套模型 -->
-            <a-asset-item id="hand-l-model" src="assets/Hand_L.glb"></a-asset-item>
-            <a-asset-item id="hand-r-model" src="assets/Hand_R.glb"></a-asset-item>
+            <!-- 🌟 修正：精準對應大寫的 Child.glb 檔名，並設定 ID 為 child-model -->
+            <a-asset-item id="child-model" src="assets/Child.glb"></a-asset-item>
+            
+            <audio id="bgm" src="assets/music/Background music.mp3" preload="auto" loop="true"></audio>
+            <img id="tutorial-img" src="assets/images/tutorial.jpeg">
+            <img id="rounded-board" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MDAiIGhlaWdodD0iMTAwMCI+PHJlY3Qgd2lkdGg9IjgwMCIgaGVpZ2h0PSIxMDAwIiByeD0iNDAiIHJ5PSI0MCIgZmlsbD0iI2ZmZmZmZiIvPjwvc3ZnPg==">
+            <img id="rounded-btn" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MDAiIGhlaWdodD0iMTAwIj48cmVjdCB3aWR0aD0iNDAwIiBoZWlnaHQ9IjEwMCIgcng9IjI1IiByeT0iMjUiIGZpbGw9IiMxMTExMTEiLz48L3N2Zz4=">
         </a-assets>
 
-        <a-light type="ambient" color="#444"></a-light>
+        <a-light id="ambient-light" type="ambient" color="#FFFFFF"></a-light>
         <a-light type="directional" position="1 2 1" intensity="0.8" castShadow="true"></a-light>
-        <a-sky color="#ECECEC"></a-sky>
+        <a-sky id="environment-sky" color="#E8E8ED"></a-sky>
 
-        <a-plane position="0 0 0" rotation="-90 0 0" width="20" height="20" color="#7BC8A4" shadow static-body></a-plane>
+        <a-entity id="bgm-player" sound="src: #bgm; loop: true; volume: 0.4"></a-entity>
 
-        <!-- 延長的大桌子 (中央) -->
-        <a-box position="1 0.5 -1.5" width="4" height="1" depth="1" color="#8B4513" shadow static-body></a-box>
-        <a-box position="-2.5 0.5 -1.5" width="2" height="1" depth="1" color="#5C4033" shadow static-body></a-box>
-
-        <!-- 測試方塊與圓柱體 -->
-        <a-entity position="-0.4 1.25 -1.5" rotation="25 35 0">
-            <a-box class="target" width="0.3" height="0.3" depth="0.3" color="#FFFFFF" material="src: #grid-texture; repeat: 1 1;" shadow static-body></a-box>
-            <a-text value="Reference Cube\nFace Area: 900 cm2" position="0 0.35 0" align="center" width="1.5" color="#FFF"></a-text>
+        <!-- 第一階段：VR 等待室 (Lobby Scene) -->
+        <a-entity id="lobby-scene" vr-scene-manager>
+            <a-entity id="vr-tutorial-board" position="0 1.6 -2.5">
+                <a-image src="#rounded-board" width="3.5" height="4.0" position="0 0 0" material="alphaTest: 0.5"></a-image>
+                <a-text value="3D Burn Area Scanner" position="0 1.5 0.01" align="center" width="6.5" color="#111111" font="roboto"></a-text>
+                <a-image src="#tutorial-img" width="2.8" height="1.3" position="0 0.5 0.01"></a-image>
+                <a-text value="1. Grab the laser pen.\n2. Hold trigger to draw a closed shape.\n3. Release to scan." position="0 -0.7 0.01" align="center" width="4.0" color="#444444" font="roboto" line-height="75"></a-text>
+                <a-entity id="vr-start-btn" class="interactable" position="0 -1.4 0.02" geometry="primitive: plane; width: 1.2; height: 0.3" material="src: #rounded-btn; transparent: true; alphaTest: 0.5; shader: flat">
+                    <a-text value="START" align="center" position="0 0 0.01" width="4.5" color="#FFFFFF" font="roboto"></a-text>
+                </a-entity>
+            </a-entity>
         </a-entity>
 
-        <a-entity position="0.4 1.25 -1.5" rotation="25 35 0">
-            <a-box class="target" width="0.3" height="0.3" depth="0.3" color="#4CC3D9" shadow static-body></a-box>
-            <a-text value="Target Cube" position="0 0.35 0" align="center" width="1.5" color="#4CC3D9"></a-text>
-        </a-entity>
-        
-        <a-entity position="1.4 1.25 -1.5" rotation="25 -20 15">
-            <a-cylinder class="target" radius="0.15" height="0.3" color="#FFFFFF" material="src: #grid-texture; repeat: 2 1;" shadow static-body></a-cylinder>
-            <a-text value="Reference Cylinder\nSide: ~2827 cm2\nTotal: ~4241 cm2" position="0 0.4 0" align="center" width="1.5" color="#FFF"></a-text>
+        <!-- 第二階段：主場景 -->
+        <a-entity id="main-scene" visible="false">
+            <a-plane position="0 0 0" rotation="-90 0 0" width="20" height="20" color="#7BC8A4" shadow static-body></a-plane>
+            <a-box position="1 0.5 -1.5" width="4" height="1" depth="1" color="#8B4513" shadow static-body></a-box>
+            <a-box position="-2.5 0.5 -1.5" width="2" height="1" depth="1" color="#5C4033" shadow static-body></a-box>
+
+            <a-entity position="-0.4 1.25 -1.5" rotation="25 35 0">
+                <a-box class="target" width="0.3" height="0.3" depth="0.3" color="#FFFFFF" material="src: #grid-texture; repeat: 1 1;" shadow static-body></a-box>
+            </a-entity>
+            <a-entity position="0.4 1.25 -1.5" rotation="25 35 0">
+                <a-box class="target" width="0.3" height="0.3" depth="0.3" color="#4CC3D9" shadow static-body></a-box>
+            </a-entity>
+            <a-entity position="1.4 1.25 -1.5" rotation="25 -20 15">
+                <a-cylinder class="target" radius="0.15" height="0.3" color="#FFFFFF" material="src: #grid-texture; repeat: 2 1;" shadow static-body></a-cylinder>
+            </a-entity>
+            <a-entity position="2.2 1.25 -1.5" rotation="25 -20 15">
+                <a-cylinder class="target" radius="0.15" height="0.3" color="#FF99CC" shadow static-body></a-cylinder>
+            </a-entity>
+            
+            <!-- human_body (維持在 X: 2.5) -->
+            <a-entity position="4 0 0" rotation="0 -90 0">
+                <a-entity class="target" gltf-model="#human-body-model" scale="1 1 1" shadow raycast-optimized></a-entity>
+            </a-entity>
+
+            <!-- 🌟 Child 模型：對應剛設定好的 child-model ID (維持在 X: 4.0) -->
+            <a-entity position="4 0 2" rotation="0 -90 0">
+                <a-entity class="target" gltf-model="#child-model" scale="1 1 1" shadow raycast-optimized></a-entity>
+            </a-entity>
+
+            <a-dodecahedron class="target" position="-2.5 1.3 -1.5" radius="0.4" color="#FFD700" shadow static-body></a-dodecahedron>
+            <a-cylinder class="target" position="-1.7 1.3 -1.5" radius="0.3" height="0.6" color="#FF6347" shadow static-body></a-cylinder>
+
+            <a-entity position="0 2 -2.5" rotation="0 0 0">
+                <a-plane width="2" height="0.6" color="#111" material="opacity: 0.9; transparent: true"></a-plane>
+                <a-text id="billboard-text" value="Ready to scan" align="center" width="5" position="0 0 0.01" color="#ffffff"></a-text>
+            </a-entity>
+
+            <a-entity id="laser-pen" class="interactable" visible="false"
+                position="1 1.04 -1.5" rotation="-90 0 0"
+                geometry="primitive: box; width: 0.08; height: 0.35; depth: 0.08"
+                material="opacity: 0; transparent: true; depthWrite: false"
+                dynamic-body="shape: box; mass: 0.5; linearDamping: 0.8; angularDamping: 0.8"
+                laser-pen-behavior>
+                <a-entity gltf-model="#pen-model" scale="1 1 1" position="0 0 0" rotation="90 0 0"></a-entity>
+            </a-entity>
         </a-entity>
 
-        <a-entity position="2.2 1.25 -1.5" rotation="25 -20 15">
-            <a-cylinder class="target" radius="0.15" height="0.3" color="#FF99CC" shadow static-body></a-cylinder>
-            <a-text value="Target Cylinder" position="0 0.4 0" align="center" width="1.5" color="#FF99CC"></a-text>
-        </a-entity>
-
-        <!-- 將人體模型放置在桌子最右側，並加上 class="target" 以供測量 -->
-        <a-entity position="2.8 1.25 -1.5" rotation="0 0 0">
-            <a-entity class="target" gltf-model="#human-body-model" scale="1 1 1" shadow static-body></a-entity>
-            <a-text value="Human Body\nTarget" position="0 0.5 0" align="center" width="1.5" color="#FFF"></a-text>
-        </a-entity>
-
-        <a-dodecahedron class="target" position="-2.5 1.3 -1.5" radius="0.4" color="#FFD700" shadow static-body></a-dodecahedron>
-        <a-cylinder class="target" position="-1.7 1.3 -1.5" radius="0.3" height="0.6" color="#FF6347" shadow static-body></a-cylinder>
-
-        <!-- 告示牌 -->
-        <a-entity position="0 2 -2.5" rotation="0 0 0">
-            <a-plane width="2" height="0.6" color="#111" material="opacity: 0.9; transparent: true"></a-plane>
-            <a-text id="billboard-text" value="Ready to paint" align="center" width="5" position="0 0 0.01" color="#FFEA00"></a-text>
-        </a-entity>
-
-        <!-- 雷射筆 -->
-        <a-entity id="laser-pen" class="interactable"
-            position="0.5 1.05 -1.3" rotation="-90 0 0" 
-            geometry="primitive: box; width: 0.08; height: 0.35; depth: 0.08"
-            material="opacity: 0; transparent: true; depthWrite: false"
-            dynamic-body="shape: box; mass: 0.5; linearDamping: 0.8; angularDamping: 0.8"
-            laser-pen-behavior>
-            <a-entity gltf-model="#pen-model" scale="1 1 1" position="0 0 0" rotation="90 0 0"></a-entity>
-        </a-entity>
-        
-        <!-- 玩家 -->
+        <!-- 控制器與視角 -->
         <a-entity id="rig" position="0 0 0" hybrid-locomotion>
             <a-camera position="0 1.6 0" look-controls="pointerLockEnabled: true" wasd-controls="enabled: false">
                 <a-entity id="desktop-cursor"
@@ -131,23 +306,21 @@
                           material="color: white; shader: flat; opacity: 0.5"
                           raycaster="objects: .interactable">
                 </a-entity>
+                <a-text id="hud-loading-text" value="" position="0 0 -0.5" align="center" width="0.8" color="#000000" opacity="0.9"></a-text>
             </a-camera>
 
-            <!-- 【修改】左手：使用 hand-controls 並強制載入自訂左手模型 -->
             <a-entity id="left-hand" 
-                      hand-controls="hand: left; color: #ffffff" 
-                      override-hand-model="#hand-l-model">
-                 <a-entity class="hand-ray" raycaster="objects: .interactable; showLine: true; far: 5; lineColor: cyan; lineOpacity: 0.5" cursor="rayOrigin: entity" rotation="-45 0 0"></a-entity>
+                      hand-controls="hand: left; handModelStyle: highPoly; color: #ffccaa"
+                      hand-model-offset="x: 28">
+                 <a-entity class="hand-ray" position="-0.02 0.013 -0.055" rotation="-50 0 0" raycaster="objects: .interactable; showLine: true; far: 5; lineColor: cyan; lineOpacity: 0.5" cursor="rayOrigin: entity"></a-entity>
             </a-entity>
             
-            <!-- 【修改】右手：使用 hand-controls 並強制載入自訂右手模型 -->
             <a-entity id="right-hand" 
-                      hand-controls="hand: right; color: #ffffff"
-                      override-hand-model="#hand-r-model">
-                <a-entity class="hand-ray" raycaster="objects: .interactable; showLine: true; far: 5; lineColor: cyan; lineOpacity: 0.5" cursor="rayOrigin: entity" rotation="-45 0 0"></a-entity>
+                      hand-controls="hand: right; handModelStyle: highPoly; color: #ffccaa"
+                      hand-model-offset="x: 28">
+                <a-entity class="hand-ray" position="0.02 0.013 -0.055" rotation="-50 0 0" raycaster="objects: .interactable; showLine: true; far: 5; lineColor: cyan; lineOpacity: 0.5" cursor="rayOrigin: entity"></a-entity>
             </a-entity>
         </a-entity>
-        
     </a-scene>
 </body>
 </html>
