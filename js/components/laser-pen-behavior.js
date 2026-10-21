@@ -1,29 +1,3 @@
-// 【修改版】模型攔截器：不只換模型，還親自接管動畫控制！
-AFRAME.registerComponent('override-hand-model', {
-    schema: { type: 'asset' },
-    dependencies: ['hand-controls'],
-    init: function () {
-        // 1. 強制把模型換成我們的自訂手套
-        this.el.setAttribute('gltf-model', this.data);
-        
-        // 2. 加上 animation-mixer，預設播放 Open (放鬆張開)，設定 0.2 秒平滑漸變
-        this.el.setAttribute('animation-mixer', 'clip: Open; crossFadeDuration: 0.2');
-
-        // 3. 監聽 VR 搖桿按鈕，自己控制動畫切換
-        const playFist = () => this.el.setAttribute('animation-mixer', 'clip: Fist; crossFadeDuration: 0.2');
-        const playOpen = () => this.el.setAttribute('animation-mixer', 'clip: Open; crossFadeDuration: 0.2');
-
-        // 側邊抓取鍵 (Grip)
-        this.el.addEventListener('gripdown', playFist);
-        this.el.addEventListener('gripup', playOpen);
-        
-        // 板機鍵 (Trigger) 雙重保險
-        this.el.addEventListener('triggerdown', playFist);
-        this.el.addEventListener('triggerup', playOpen);
-    }
-});
-
-// 原本的雷射筆與抓取邏輯 (維持不變)
 AFRAME.registerComponent('laser-pen-behavior', {
     init: function () {
         this.isGrabbedVR = false;
@@ -32,7 +6,6 @@ AFRAME.registerComponent('laser-pen-behavior', {
         this.isFiring = false;
         this.wasFiring = false; 
         this.grabbedBy = null; 
-        this.lastPreviewTime = 0; 
         
         this.onHoverEnter = this.onHoverEnter.bind(this);
         this.onHoverLeave = this.onHoverLeave.bind(this);
@@ -62,7 +35,10 @@ AFRAME.registerComponent('laser-pen-behavior', {
         this.originalPosition = { x: pos.x, y: pos.y, z: pos.z };
         this.originalRotation = { x: rot.x, y: rot.y, z: rot.z };
         
-        this.el.sceneEl.addEventListener('loaded', () => {
+        this.lastHitPoint = null;
+        this.lastHitNormal = null;
+
+        const bindHandEvents = () => {
             const leftHand = document.querySelector('#left-hand');
             const rightHand = document.querySelector('#right-hand');
             
@@ -78,41 +54,67 @@ AFRAME.registerComponent('laser-pen-behavior', {
                 rightHand.addEventListener('triggerdown', (e) => this.onVRTriggerDown(e, rightHand));
                 rightHand.addEventListener('triggerup', (e) => this.onVRTriggerUp(e, rightHand));
             }
+        };
 
+        if (document.readyState === 'complete') {
+            bindHandEvents();
+        } else {
+            window.addEventListener('load', bindHandEvents);
+        }
+
+        this.el.sceneEl.addEventListener('loaded', () => {
             this.points3D = []; 
-            
-            this.lineMaterial = new THREE.LineBasicMaterial({ 
-                color: 0xff0000, 
-                depthTest: false, 
-                depthWrite: false,
-                visible: false
-            });
-            this.lineGeometry = new THREE.BufferGeometry();
-            this.lineMesh = new THREE.Line(this.lineGeometry, this.lineMaterial);
-            this.lineMesh.renderOrder = 999;
-            
             this.dummy = new THREE.Object3D(); 
-            
-            this.maxPreviewHits = 10000; 
-            const previewGeo = new THREE.BoxGeometry(1, 1, 0.002); 
+            this.manualRaycaster = new THREE.Raycaster();
+
+            this.maxPreviewHits = 15000; 
+            const previewGeo = new THREE.BoxGeometry(0.006, 0.006, 1); 
             const previewMat = new THREE.MeshBasicMaterial({ 
-                color: 0xFFEA00, transparent: true, opacity: 0.5, depthTest: true, depthWrite: false 
+                color: 0x008cba,       
+                transparent: true, 
+                opacity: 0.95,          
+                //blending: THREE.AdditiveBlending, 
+                depthTest: true, 
+                depthWrite: false 
             });
             this.previewInstancedMesh = new THREE.InstancedMesh(previewGeo, previewMat, this.maxPreviewHits);
-            this.previewInstancedMesh.count = 0; 
-            this.previewInstancedMesh.renderOrder = 997;
+            this.previewInstancedMesh.frustumCulled = false; 
+            this.previewInstancedMesh.renderOrder = 999;
+            
+            this.previewInstancedMesh.count = this.maxPreviewHits;
+            this.previewCursor = 0; 
+
+            this.clearPreviewPoints = () => {
+                this.dummy.position.set(0, -9999, 0); 
+                this.dummy.scale.set(0, 0, 0);
+                this.dummy.updateMatrix();
+                for (let i = 0; i < this.maxPreviewHits; i++) {
+                    this.previewInstancedMesh.setMatrixAt(i, this.dummy.matrix);
+                }
+                this.previewInstancedMesh.instanceMatrix.needsUpdate = true;
+                this.previewCursor = 0; 
+                this.lastHitPoint = null;
+                this.lastRayOrigin = null;
+                this.lastRayDirection = null;
+                this.lastHitNormal = null;
+            };
+
+            this.clearPreviewPoints();
+            this.el.sceneEl.object3D.add(this.previewInstancedMesh);
 
             this.maxHits = 40000; 
             const paintGeo = new THREE.BoxGeometry(1, 1, 0.002); 
             const paintMat = new THREE.MeshBasicMaterial({ 
-                color: 0x00ff66, transparent: true, opacity: 0.85, depthTest: true, depthWrite: false 
+                color: 0x008cba, 
+                transparent: true, 
+                opacity: 0.05,   
+                depthTest: true, 
+                depthWrite: false 
             });
             this.hitInstancedMesh = new THREE.InstancedMesh(paintGeo, paintMat, this.maxHits);
+            this.hitInstancedMesh.frustumCulled = false; 
             this.hitInstancedMesh.count = 0; 
             this.hitInstancedMesh.renderOrder = 998;
-            
-            this.el.sceneEl.object3D.add(this.lineMesh);
-            this.el.sceneEl.object3D.add(this.previewInstancedMesh);
             this.el.sceneEl.object3D.add(this.hitInstancedMesh);
             
             this.cameraEl = document.querySelector('a-camera');
@@ -222,13 +224,7 @@ AFRAME.registerComponent('laser-pen-behavior', {
         if (this.hasLoaded) {
             if (this.isFiring) {
                 if (!this.wasFiring) this.startDrawing();
-                
                 this.fireLaser();
-                
-                if (time - this.lastPreviewTime > 80) {
-                    this.updatePreviewFill();
-                    this.lastPreviewTime = time;
-                }
             } else {
                 if (this.wasFiring) this.stopDrawing();
             }
@@ -241,34 +237,130 @@ AFRAME.registerComponent('laser-pen-behavior', {
         if (this.processTimeout) clearTimeout(this.processTimeout);
 
         this.points3D = [];
-        this.lineGeometry.setFromPoints(this.points3D);
+        this.lastHitPoint = null;
+        this.lastHitNormal = null;
+        this.lastRayOrigin = null;
+        this.lastRayDirection = null;
         
-        this.hitInstancedMesh.count = 0; 
-        this.hitInstancedMesh.instanceMatrix.needsUpdate = true;
+        // 🌟 新增：防手抖平滑系統的獨立起始點
+        this.smoothedRayOrigin = null;
+        this.smoothedRayDirection = null;
         
-        this.previewInstancedMesh.count = 0;
-        this.previewInstancedMesh.instanceMatrix.needsUpdate = true;
+        if (this.clearPreviewPoints) this.clearPreviewPoints();
+        
+        if (this.hitInstancedMesh) {
+            this.hitInstancedMesh.count = 0; 
+            this.hitInstancedMesh.instanceMatrix.needsUpdate = true;
+        }
         
         const areaUI = document.getElementById('area-display');
         if (areaUI) areaUI.style.display = 'none';
 
         const billboardText = document.getElementById('billboard-text');
-        if (billboardText) billboardText.setAttribute('text', 'value', 'Drawing...');
+        if (billboardText) billboardText.setAttribute('value', 'Scanning...');
+
+        const hudText = document.getElementById('hud-loading-text');
+        if (hudText) hudText.setAttribute('value', '');
     },
 
     fireLaser: function () {
-        const raycasterComponent = this.raycasterEntity.components.raycaster;
-        if (!raycasterComponent || !raycasterComponent.intersections) return;
+        // 取得手把（紅線）最原始、會發抖的位置與方向
+        const rawOrigin = new THREE.Vector3();
+        const rawDirection = new THREE.Vector3(0, 0, -1);
+        this.raycasterEntity.object3D.getWorldPosition(rawOrigin);
+        rawDirection.transformDirection(this.raycasterEntity.object3D.matrixWorld).normalize();
 
-        const intersections = raycasterComponent.intersections;
-        if (intersections && intersections.length > 0) {
-            const hitNormal = intersections[0].face.normal.clone().transformDirection(intersections[0].object.matrixWorld).normalize();
-            const offsetPoint = intersections[0].point.clone().addScaledVector(hitNormal, 0.002);
+        // 🌟 防手抖核心演算法 (Lazy Mouse)
+        if (!this.smoothedRayOrigin || !this.smoothedRayDirection) {
+            // 第一筆落下時，筆尖直接對齊手把
+            this.smoothedRayOrigin = rawOrigin.clone();
+            this.smoothedRayDirection = rawDirection.clone();
+        } else {
+            // 💡 這裡就是魔法參數：平滑係數 (Smooth Factor)
+            // 範圍 0.0 ~ 1.0。越小 = 越像橡皮筋拉著、曲線越完美拉直；越大 = 越敏銳但易發抖
+            const smoothFactor = 0.15; 
             
-            this.points3D.push(offsetPoint);
-            this.lineGeometry.setFromPoints(this.points3D);
-            this.lineGeometry.computeBoundingSphere();
+            this.smoothedRayOrigin.lerp(rawOrigin, smoothFactor);
+            this.smoothedRayDirection.lerp(rawDirection, smoothFactor).normalize();
         }
+
+        const targetEls = document.querySelectorAll('.target');
+        const targetMeshes = Array.from(targetEls).map(el => el.getObject3D('mesh')).filter(m => m);
+
+        // ⚠️ 取代原本的 raycaster，我們強迫系統使用「平滑過後」的射線去尋找表面
+        this.manualRaycaster.set(this.smoothedRayOrigin, this.smoothedRayDirection);
+        const currentIntersects = this.manualRaycaster.intersectObjects(targetMeshes, true);
+
+        if (currentIntersects.length === 0) {
+            this.lastHitPoint = null; 
+            this.lastRayOrigin = null;
+            this.lastRayDirection = null;
+            this.lastHitNormal = null;
+            return;
+        }
+
+        const hit = currentIntersects[0];
+        const hitNormal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).normalize();
+        const offsetPoint = hit.point.clone().addScaledVector(hitNormal, 0.003);
+
+        // 物理安全補間 (用來防止揮太快產生斷線，現在一樣套用平滑射線的座標)
+        if (this.lastHitPoint && this.lastRayOrigin && this.lastRayDirection && this.lastHitNormal) {
+            const dist = this.lastHitPoint.distanceTo(offsetPoint);
+            if (dist > 0.004 && dist < 0.15) {
+                const steps = Math.min(Math.floor(dist / 0.004), 10); 
+                for (let i = 1; i < steps; i++) {
+                    const t = i / steps;
+                    const interpOrigin = new THREE.Vector3().lerpVectors(this.lastRayOrigin, this.smoothedRayOrigin, t);
+                    const interpDir = new THREE.Vector3().lerpVectors(this.lastRayDirection, this.smoothedRayDirection, t).normalize();
+                    
+                    this.manualRaycaster.set(interpOrigin, interpDir);
+                    const intersects = this.manualRaycaster.intersectObjects(targetMeshes, true);
+                    
+                    if (intersects.length > 0) {
+                        const iHit = intersects[0];
+                        const iNormal = iHit.face.normal.clone().transformDirection(iHit.object.matrixWorld).normalize();
+                        const iOffset = iHit.point.clone().addScaledVector(iNormal, 0.003);
+                        this.points3D.push(iOffset);
+                        
+                        if (this.previewCursor < this.maxPreviewHits) {
+                            const lastP = this.points3D[this.points3D.length - 2];
+                            const midP = lastP.clone().lerp(iOffset, 0.5);
+                            this.dummy.position.copy(midP);
+                            this.dummy.scale.set(1, 1, lastP.distanceTo(iOffset));
+                            const upVec = iNormal.clone();
+                            const m = new THREE.Matrix4();
+                            m.lookAt(midP, iOffset, upVec);
+                            this.dummy.quaternion.setFromRotationMatrix(m);
+                            this.dummy.updateMatrix();
+                            this.previewInstancedMesh.setMatrixAt(this.previewCursor, this.dummy.matrix);
+                            this.previewInstancedMesh.instanceMatrix.needsUpdate = true;
+                            this.previewCursor++;
+                        }
+                    }
+                }
+            }
+        }
+
+        this.points3D.push(offsetPoint);
+        
+        if (this.lastHitPoint && this.previewCursor < this.maxPreviewHits && this.lastHitPoint.distanceTo(offsetPoint) < 0.15) {
+            const midP = this.lastHitPoint.clone().lerp(offsetPoint, 0.5);
+            this.dummy.position.copy(midP);
+            this.dummy.scale.set(1, 1, this.lastHitPoint.distanceTo(offsetPoint));
+            const m = new THREE.Matrix4();
+            m.lookAt(midP, offsetPoint, hitNormal);
+            this.dummy.quaternion.setFromRotationMatrix(m);
+            this.dummy.updateMatrix();
+            this.previewInstancedMesh.setMatrixAt(this.previewCursor, this.dummy.matrix);
+            this.previewInstancedMesh.instanceMatrix.needsUpdate = true;
+            this.previewCursor++;
+        }
+
+        // 把當下「平滑後」的資料存起來，給下一幀使用
+        this.lastHitPoint = offsetPoint.clone();
+        this.lastRayOrigin = this.smoothedRayOrigin.clone();
+        this.lastRayDirection = this.smoothedRayDirection.clone();
+        this.lastHitNormal = hitNormal.clone();
     },
 
     isPointInPolygon: function(px, py, polygon) {
@@ -282,87 +374,51 @@ AFRAME.registerComponent('laser-pen-behavior', {
         return isInside;
     },
 
-    updatePreviewFill: function() {
-        if (this.points3D.length < 3) return;
-
-        const camera = this.cameraEl.components.camera.camera;
-        const ndcPoints = [];
-        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-
-        this.points3D.forEach(p3d => {
-            const pNdc = p3d.clone().project(camera);
-            ndcPoints.push({ x: pNdc.x, y: pNdc.y });
-            if (pNdc.x < minX) minX = pNdc.x;
-            if (pNdc.x > maxX) maxX = pNdc.x;
-            if (pNdc.y < minY) minY = pNdc.y;
-            if (pNdc.y > maxY) maxY = pNdc.y;
-        });
-
-        const marginX = (maxX - minX) * 0.05;
-        const marginY = (maxY - minY) * 0.05;
-        minX -= marginX; maxX += marginX;
-        minY -= marginY; maxY += marginY;
-
-        const resolution = 15; 
-        const stepX = (maxX - minX) / resolution;
-        const stepY = (maxY - minY) / resolution;
-        if (stepX <= 0 || stepY <= 0) return;
-
-        const raycaster = new THREE.Raycaster();
-        const targetEls = document.querySelectorAll('.target');
-        const targetMeshes = Array.from(targetEls).map(el => el.getObject3D('mesh')).filter(m => m);
-
-        let hitCount = 0;
-        const fov = camera.fov * (Math.PI / 180);
-        const aspect = camera.aspect;
-
-        for (let x = minX; x <= maxX; x += stepX) {
-            for (let y = minY; y <= maxY; y += stepY) {
-                if (this.isPointInPolygon(x, y, ndcPoints)) {
-                    raycaster.setFromCamera(new THREE.Vector2(x, y), camera);
-                    const intersects = raycaster.intersectObjects(targetMeshes, true);
-
-                    if (intersects.length > 0) {
-                        const hit = intersects[0];
-                        
-                        if (hitCount < this.maxPreviewHits) {
-                            const dist = hit.distance;
-                            const planeHeightAtDist = 2 * Math.tan(fov / 2) * dist;
-                            const planeWidthAtDist = planeHeightAtDist * aspect;
-                            const patchWidth = (stepX / 2) * planeWidthAtDist; 
-                            const patchHeight = (stepY / 2) * planeHeightAtDist;
-
-                            const normal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).normalize();
-                            
-                            this.dummy.scale.set(patchWidth * 2.5, patchHeight * 2.5, 1);
-                            this.dummy.position.copy(hit.point);
-                            this.dummy.position.addScaledVector(normal, 0.002);
-                            this.dummy.quaternion.setFromUnitVectors(new THREE.Vector3(0,0,1), normal);
-                            
-                            this.dummy.updateMatrix();
-                            this.previewInstancedMesh.setMatrixAt(hitCount, this.dummy.matrix);
-                            hitCount++;
-                        }
-                    }
-                }
-            }
-        }
-        this.previewInstancedMesh.count = hitCount;
-        this.previewInstancedMesh.instanceMatrix.needsUpdate = true;
-    },
-
     stopDrawing: function() {
-        if (this.points3D.length < 3) {
-            const billboardText = document.getElementById('billboard-text');
-            if (billboardText) billboardText.setAttribute('text', 'value', 'Ready');
+        const billboardText = document.getElementById('billboard-text');
+        const hudText = document.getElementById('hud-loading-text');
+
+        let maxSpan = 0;
+        let gapDistance = 0;
+
+        if (this.points3D.length > 0) {
+            let box = new THREE.Box3().setFromPoints(this.points3D);
+            let size = new THREE.Vector3();
+            box.getSize(size);
+            maxSpan = size.length(); 
+            
+            const firstPoint = this.points3D[0];
+            const lastPoint = this.points3D[this.points3D.length - 1];
+            gapDistance = firstPoint.distanceTo(lastPoint);
+        }
+
+        if (this.points3D.length < 10 || maxSpan < 0.10 || gapDistance > (maxSpan * 0.5)) {
+            if (billboardText) billboardText.setAttribute('value', 'Ready');
+            if (hudText) hudText.setAttribute('value', '');
+            if (this.clearPreviewPoints) this.clearPreviewPoints();
             return;
         }
 
-        this.previewInstancedMesh.count = 0;
-        this.previewInstancedMesh.instanceMatrix.needsUpdate = true;
+        if (gapDistance > 0.001 && this.previewInstancedMesh && this.previewCursor < this.maxPreviewHits) {
+            const firstPoint = this.points3D[0];
+            const lastPoint = this.points3D[this.points3D.length - 1];
+            const midPoint = lastPoint.clone().lerp(firstPoint, 0.5);
+            
+            this.dummy.position.copy(midPoint);
+            this.dummy.scale.set(1, 1, gapDistance);
+            
+            const upVector = this.lastHitNormal ? this.lastHitNormal.clone() : new THREE.Vector3(0,1,0);
+            const m = new THREE.Matrix4();
+            m.lookAt(midPoint, firstPoint, upVector);
+            this.dummy.quaternion.setFromRotationMatrix(m);
+            
+            this.dummy.updateMatrix();
+            this.previewInstancedMesh.setMatrixAt(this.previewCursor, this.dummy.matrix);
+            this.previewInstancedMesh.instanceMatrix.needsUpdate = true;
+            this.previewCursor++;
+        }
 
-        const billboardText = document.getElementById('billboard-text');
-        if (billboardText) billboardText.setAttribute('text', 'value', 'Painting...');
+        if (billboardText) billboardText.setAttribute('value', 'loading...');
 
         const activeCamera = this.cameraEl.components.camera.camera;
         const staticCamera = activeCamera.clone(); 
@@ -384,11 +440,10 @@ AFRAME.registerComponent('laser-pen-behavior', {
         minX -= marginX; maxX += marginX;
         minY -= marginY; maxY += marginY;
 
-        const resolution = 40; 
-        const stepX = (maxX - minX) / resolution;
-        const stepY = (maxY - minY) / resolution;
-        if (stepX <= 0 || stepY <= 0) return;
-        
+        const resolution = 35; 
+        let indexX = 0;
+        let indexY = 0;
+
         let totalAreaSqMeters = 0;
         let hitCount = 0;
         this.hitInstancedMesh.count = 0;
@@ -399,20 +454,22 @@ AFRAME.registerComponent('laser-pen-behavior', {
 
         const fov = staticCamera.fov * (Math.PI / 180);
         const aspect = staticCamera.aspect;
-
-        let currentX = minX;
-        let currentY = minY;
         
         this.isProcessing = true; 
-        let lastTextUpdateTime = 0; 
         
         const processChunk = () => {
             if (!this.isProcessing) return; 
             
             const chunkStartTime = performance.now();
+            let processedSteps = 0;
             
-            while (currentX <= maxX) {
-                while (currentY <= maxY) {
+            while (indexX <= resolution) {
+                let currentX = minX + (indexX / resolution) * (maxX - minX);
+                
+                while (indexY <= resolution) {
+                    let currentY = minY + (indexY / resolution) * (maxY - minY);
+                    processedSteps++;
+
                     if (this.isPointInPolygon(currentX, currentY, ndcPoints)) {
                         raycaster.setFromCamera(new THREE.Vector2(currentX, currentY), staticCamera);
                         const intersects = raycaster.intersectObjects(targetMeshes, true);
@@ -420,12 +477,12 @@ AFRAME.registerComponent('laser-pen-behavior', {
                         if (intersects.length > 0) {
                             const hit = intersects[0];
                             const dist = hit.distance;
+                            
                             const planeHeightAtDist = 2 * Math.tan(fov / 2) * dist;
                             const planeWidthAtDist = planeHeightAtDist * aspect;
-                            
-                            const patchWidth = (stepX / 2) * planeWidthAtDist; 
-                            const patchHeight = (stepY / 2) * planeWidthAtDist;
-                            const basePatchArea = patchWidth * patchHeight;
+                            const patchWidth = (1 / resolution) * planeWidthAtDist * (maxX - minX) / 2; 
+                            const patchHeight = (1 / resolution) * planeHeightAtDist * (maxY - minY) / 2;
+                            const basePatchArea = Math.abs(patchWidth * patchHeight);
 
                             const rayDir = raycaster.ray.direction;
                             const normal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).normalize();
@@ -447,32 +504,33 @@ AFRAME.registerComponent('laser-pen-behavior', {
                             }
                         }
                     }
-                    currentY += stepY;
+                    indexY++;
                     
-                    if (performance.now() - chunkStartTime > 15) {
+                    if (performance.now() - chunkStartTime > 12) {
                         this.hitInstancedMesh.count = hitCount;
                         this.hitInstancedMesh.instanceMatrix.needsUpdate = true;
                         
-                        if (performance.now() - lastTextUpdateTime > 250) {
-                            const progress = Math.min(100, Math.round(((currentX - minX) / (maxX - minX)) * 100));
-                            if (billboardText) billboardText.setAttribute('text', 'value', `Painting: ${progress}%`);
-                            lastTextUpdateTime = performance.now();
-                        }
+                        const totalSteps = (resolution + 1) * (resolution + 1);
+                        const currentStepCount = (indexX * (resolution + 1)) + indexY;
+                        const progress = Math.min(99, Math.round((currentStepCount / totalSteps) * 100));
+                        
+                        if (billboardText) billboardText.setAttribute('value', `Loading: ${progress}%`);
+                        if (hudText) hudText.setAttribute('value', `Loading: ${progress}%`);
                         
                         this.processTimeout = setTimeout(processChunk, 0); 
                         return;
                     }
                 }
-                currentY = minY;
-                currentX += stepX;
+                indexY = 0; 
+                indexX++;
             }
 
             this.isProcessing = false;
+            
+            if (this.clearPreviewPoints) this.clearPreviewPoints();
+
             this.hitInstancedMesh.count = hitCount;
             this.hitInstancedMesh.instanceMatrix.needsUpdate = true;
-
-            const closedPoints = [...this.points3D, this.points3D[0]];
-            this.lineGeometry.setFromPoints(closedPoints);
 
             const areaCm2 = (totalAreaSqMeters * 10000).toFixed(1);
             
@@ -482,9 +540,9 @@ AFRAME.registerComponent('laser-pen-behavior', {
                 areaUI.style.display = 'block';
             }
 
-            if (billboardText) {
-                billboardText.setAttribute('text', 'value', `True 3D Area:\n${areaCm2} cm2`);
-            }
+            const resultMsg = `True 3D Area:\n${areaCm2} cm2`;
+            if (billboardText) billboardText.setAttribute('value', resultMsg);
+            if (hudText) hudText.setAttribute('value', '');
         };
         
         processChunk(); 
