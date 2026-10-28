@@ -44,14 +44,14 @@ AFRAME.registerComponent('hybrid-locomotion', {
             };
 
             if (leftHand) {
-                // 🌟 讓左手同時聽懂 Quest 搖桿 (thumbstick) 與 VIVE 觸控板 (trackpad)
+                // 🌟 同時綁定 Quest 搖桿 (thumbstickmoved) 與 VIVE 觸控板 (trackpadmoved)
                 leftHand.addEventListener('thumbstickmoved', handleLeftAxis);
-                leftHand.addEventListener('trackpadmoved', handleLeftAxis);
+                leftHand.addEventListener('trackpadmoved', handleLeftAxis); 
             }
             if (rightHand) {
-                // 🌟 讓右手同時聽懂 Quest 搖桿 (thumbstick) 與 VIVE 觸控板 (trackpad)
+                // 🌟 同時綁定 Quest 搖桿 (thumbstickmoved) 與 VIVE 觸控板 (trackpadmoved)
                 rightHand.addEventListener('thumbstickmoved', handleRightAxis);
-                rightHand.addEventListener('trackpadmoved', handleRightAxis);
+                rightHand.addEventListener('trackpadmoved', handleRightAxis); 
             }
         };
 
@@ -65,7 +65,7 @@ AFRAME.registerComponent('hybrid-locomotion', {
         const rig = this.el.object3D;
         const camera = document.querySelector('a-camera').object3D;
 
-        // 🌟 關鍵修改：前後移動 (moveZ) 現在「只」受左手 (leftY) 影響
+        // 關鍵修改：前後移動 (moveZ) 現在「只」受左手 (leftY) 影響
         let moveZ = this.leftY;
         let moveX = this.leftX; 
 
