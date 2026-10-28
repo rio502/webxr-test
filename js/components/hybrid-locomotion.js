@@ -5,87 +5,87 @@ AFRAME.registerComponent('hybrid-locomotion', {
         snapAngle: { default: 45 } 
     },
     init: function () {
-        // 移除了 rightY，因為右手不再負責任何位移
-        this.leftY = 0; this.leftX = 0; this.rightX = 0;
         this.keys = {};
         this.canSnapTurn = true; 
         
         // 準備一個用來儲存相機「真實世界方向」的四元數
         this.cameraWorldQuat = new THREE.Quaternion();
 
+        // 綁定鍵盤事件 (電腦版備用)
         window.addEventListener('keydown', (e) => { this.keys[e.code] = true; });
         window.addEventListener('keyup', (e) => { this.keys[e.code] = false; });
-        
-        const bindControllers = () => {
-            const leftHand = document.querySelector('#left-hand');
-            const rightHand = document.querySelector('#right-hand');
-            
-            // 🌟 獨立抽取出「左手事件處理邏輯」（專職負責前後左右的平移）
-            const handleLeftAxis = (evt) => { 
-                this.leftX = evt.detail.x; 
-                this.leftY = evt.detail.y; 
-            };
-
-            // 🌟 獨立抽取出「右手事件處理邏輯」（專職負責轉向，忽略 Y 軸數值）
-            const handleRightAxis = (evt) => { 
-                this.rightX = evt.detail.x;
-
-                if (Math.abs(this.rightX) < 0.2) {
-                    this.canSnapTurn = true; 
-                } else if (this.canSnapTurn) {
-                    if (this.rightX > 0.6) {
-                        this.el.object3D.rotation.y -= THREE.MathUtils.degToRad(this.data.snapAngle);
-                        this.canSnapTurn = false;
-                    } else if (this.rightX < -0.6) {
-                        this.el.object3D.rotation.y += THREE.MathUtils.degToRad(this.data.snapAngle);
-                        this.canSnapTurn = false;
-                    }
-                }
-            };
-
-            if (leftHand) {
-                // 🌟 同時綁定 Quest 搖桿 (thumbstickmoved) 與 VIVE 觸控板 (trackpadmoved)
-                leftHand.addEventListener('thumbstickmoved', handleLeftAxis);
-                leftHand.addEventListener('trackpadmoved', handleLeftAxis); 
-            }
-            if (rightHand) {
-                // 🌟 同時綁定 Quest 搖桿 (thumbstickmoved) 與 VIVE 觸控板 (trackpadmoved)
-                rightHand.addEventListener('thumbstickmoved', handleRightAxis);
-                rightHand.addEventListener('trackpadmoved', handleRightAxis); 
-            }
-        };
-
-        if (document.readyState === 'complete') {
-            bindControllers();
-        } else {
-            window.addEventListener('load', bindControllers);
-        }
     },
     tick: function () {
         const rig = this.el.object3D;
-        const camera = document.querySelector('a-camera').object3D;
+        const cameraEl = document.querySelector('a-camera');
+        if (!cameraEl) return;
+        const camera = cameraEl.object3D;
 
-        // 關鍵修改：前後移動 (moveZ) 現在「只」受左手 (leftY) 影響
-        let moveZ = this.leftY;
-        let moveX = this.leftX; 
+        let moveZ = 0;
+        let moveX = 0; 
+        let currentRightX = 0;
 
+        // 1. 讀取鍵盤輸入
         if (this.keys['KeyW']) moveZ -= 1;
         if (this.keys['KeyS']) moveZ += 1;
         if (this.keys['KeyA']) moveX -= 1;
         if (this.keys['KeyD']) moveX += 1;
 
+        // 🌟 2. 終極殺手鐧：直接強制讀取 WebXR 原生硬體數據 (完美支援 VIVE Focus Vision)
+        if (this.el.sceneEl.renderer.xr.isPresenting) {
+            const session = this.el.sceneEl.renderer.xr.getSession();
+            if (session && session.inputSources) {
+                for (let i = 0; i < session.inputSources.length; i++) {
+                    const source = session.inputSources[i];
+                    // 確保設備有提供 gamepad 數據，且軸向數量足夠
+                    if (source && source.gamepad && source.gamepad.axes.length >= 4) {
+                        
+                        // WebXR 標準映射：axes[2] 是蘑菇頭左右 (X)，axes[3] 是蘑菇頭上下 (Y)
+                        const axesX = source.gamepad.axes[2];
+                        const axesY = source.gamepad.axes[3];
+                        
+                        // 設置微小的死區(Deadzone)，防止硬體搖桿老化飄移
+                        const deadzone = 0.1;
+
+                        if (source.handedness === 'left') {
+                            // 左手負責位移
+                            if (Math.abs(axesX) > deadzone) moveX += axesX;
+                            if (Math.abs(axesY) > deadzone) moveZ += axesY;
+                        } else if (source.handedness === 'right') {
+                            // 右手負責轉向
+                            if (Math.abs(axesX) > deadzone) {
+                                currentRightX = axesX;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- 處理右手轉向 (Snap Turn) ---
+        if (Math.abs(currentRightX) < 0.2) {
+            this.canSnapTurn = true; 
+        } else if (this.canSnapTurn) {
+            if (currentRightX > 0.6) {
+                rig.rotation.y -= THREE.MathUtils.degToRad(this.data.snapAngle);
+                this.canSnapTurn = false;
+            } else if (currentRightX < -0.6) {
+                rig.rotation.y += THREE.MathUtils.degToRad(this.data.snapAngle);
+                this.canSnapTurn = false;
+            }
+        }
+
+        // --- 處理位移 ---
         moveZ = Math.max(-1, Math.min(1, moveZ));
         moveX = Math.max(-1, Math.min(1, moveX));
 
-        // 如果完全沒有要移動，就提早結束，節省效能
         if (Math.abs(moveZ) <= 0.05 && Math.abs(moveX) <= 0.05) return;
 
-        // 取得相機在「真實世界」中的旋轉，把 rig (身體) 的旋轉也算進來
+        // 取得相機真實世界旋轉，確保往前推就是「視覺上的正前方」
         camera.getWorldQuaternion(this.cameraWorldQuat);
 
         if (Math.abs(moveZ) > 0.05) {
             const direction = new THREE.Vector3(0, 0, 1);
-            // 改用 cameraWorldQuat，保證不論身體怎麼轉，前後方向都正確
             direction.applyQuaternion(this.cameraWorldQuat);
             direction.y = 0; 
             direction.normalize();
@@ -94,7 +94,6 @@ AFRAME.registerComponent('hybrid-locomotion', {
 
         if (Math.abs(moveX) > 0.05) {
             const direction = new THREE.Vector3(1, 0, 0);
-            // 同樣套用真實世界的旋轉
             direction.applyQuaternion(this.cameraWorldQuat);
             direction.y = 0; 
             direction.normalize();
