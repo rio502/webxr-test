@@ -11,28 +11,58 @@
     <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-physics-system@v4.2.2/dist/aframe-physics-system.min.js"></script>
     <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-extras@7.0.0/dist/aframe-extras.min.js"></script>
     <script src="https://unpkg.com/super-hands@3.0.3/dist/super-hands.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/aframe-blink-controls/dist/aframe-blink-controls.min.js"></script>
+    
+    <!-- 🌟 BVH 空間樹加速引擎 -->
+    <script src="https://unpkg.com/three-mesh-bvh@0.7.3/build/index.umd.js"></script>
+    <script>
+        // 🌟 修正：一載入套件就立刻強行綁定到 THREE 核心，確保 BVH 絕對不會失敗
+        if (window.MeshBVH) {
+            THREE.BufferGeometry.prototype.computeBoundsTree = window.MeshBVH.computeBoundsTree;
+            THREE.BufferGeometry.prototype.disposeBoundsTree = window.MeshBVH.disposeBoundsTree;
+            THREE.Mesh.prototype.raycast = window.MeshBVH.acceleratedRaycast;
+        }
+    </script>
 
     <script>
         AFRAME.registerComponent('raycast-optimized', {
             init: function () {
                 this.el.addEventListener('model-loaded', () => {
                     const obj = this.el.getObject3D('mesh');
+                    const modelName = this.el.getAttribute('gltf-model');
+                    let polyCount = 0;
+                    let bvhSuccess = false;
+
                     if (obj) {
                         obj.traverse((child) => {
                             if (child.isMesh) {
                                 child.geometry.computeBoundingBox();
                                 child.geometry.computeBoundingSphere();
+                                
+                                if (child.geometry.index) {
+                                    polyCount += child.geometry.index.count / 3;
+                                } else if (child.geometry.attributes.position) {
+                                    polyCount += child.geometry.attributes.position.count / 3;
+                                }
+
+                                // 建立 BVH 空間樹
+                                if (child.geometry.computeBoundsTree) {
+                                    try {
+                                        child.geometry.computeBoundsTree();
+                                        bvhSuccess = true;
+                                    } catch(e) {}
+                                }
                             }
                         });
+                        
+                        console.warn(`[效能健檢] ${modelName} | 面數: ${Math.round(polyCount).toLocaleString()} | BVH加速: ${bvhSuccess ? '成功 ✅' : '失敗 ❌'}`);
                     }
                 });
             }
         });
-    </script>
 
-    <script>
         AFRAME.registerComponent('hand-model-offset', {
-            schema: { x: { default: 0 } },
+            schema: { x: { default: 0 }, y: { default: 0 }, z: { default: 0 } },
             tick: function () {
                 if (this.done) return;
                 const children = this.el.object3D.children;
@@ -40,16 +70,15 @@
                     const child = children[i];
                     if (child.name === 'Armature') {
                         child.rotation.x += THREE.MathUtils.degToRad(this.data.x);
+                        child.rotation.y += THREE.MathUtils.degToRad(this.data.y);
+                        child.rotation.z += THREE.MathUtils.degToRad(this.data.z);
                         this.done = true; 
                         break;
                     }
                 }
             }
         });
-    </script>
 
-    <!-- 🌟 VR 首頁與場景切換控制器 -->
-    <script>
         AFRAME.registerComponent('vr-scene-manager', {
             init: function() {
                 const startBtn = document.getElementById('vr-start-btn');
@@ -63,7 +92,6 @@
                 const rightHand = document.getElementById('right-hand');
                 const pen = document.getElementById('laser-pen');
                 
-                // --- 1. 點擊 START 進入主場景 ---
                 startBtn.addEventListener('mousedown', () => {
                     lobbyScene.setAttribute('visible', 'false');
                     lobbyScene.setAttribute('position', '0 -999 0');
@@ -73,23 +101,14 @@
                         pen.setAttribute('visible', 'true');
                         pen.object3D.visible = true;
                     }
-
                     sky.setAttribute('color', '#FFFFFF');
                     ambientLight.setAttribute('color', '#CCC');
-                    
-                    if (bgmPlayer && bgmPlayer.components && bgmPlayer.components.sound) {
-                        bgmPlayer.components.sound.playSound();
-                    }
+                    if (bgmPlayer && bgmPlayer.components && bgmPlayer.components.sound) bgmPlayer.components.sound.playSound();
                 });
 
-                startBtn.addEventListener('mouseenter', () => {
-                    startBtn.setAttribute('material', 'color', '#666666'); 
-                });
-                startBtn.addEventListener('mouseleave', () => {
-                    startBtn.setAttribute('material', 'color', '#FFFFFF'); 
-                });
+                startBtn.addEventListener('mouseenter', () => { startBtn.setAttribute('material', 'color', '#666666'); });
+                startBtn.addEventListener('mouseleave', () => { startBtn.setAttribute('material', 'color', '#FFFFFF'); });
 
-                // --- 2. 長按 X 鍵退出 ---
                 let progressInterval;
                 let holdTime = 0;
                 const requiredHoldTime = 1500;
@@ -103,40 +122,31 @@
                             holdTime += 50;
                             let percent = Math.min(100, Math.floor((holdTime / requiredHoldTime) * 100));
                             if(hudLoadingText) hudLoadingText.setAttribute('value', `Returning... ${percent}%`);
-                            
                             if (holdTime >= requiredHoldTime) {
                                 clearInterval(progressInterval);
                                 executeReturn();
                             }
                         }, 50);
                     });
-
                     leftHand.addEventListener('xbuttonup', () => {
                         clearInterval(progressInterval);
-                        if (holdTime < requiredHoldTime) {
-                            if(hudLoadingText) hudLoadingText.setAttribute('value', '');
-                        }
+                        if (holdTime < requiredHoldTime && hudLoadingText) hudLoadingText.setAttribute('value', '');
                     });
                 }
 
-                // --- 3. 終極退出與還原程序 ---
                 function executeReturn() {
                     mainScene.setAttribute('visible', 'false');
                     sky.setAttribute('color', '#E8E8ED');
                     ambientLight.setAttribute('color', '#FFFFFF');
-
                     lobbyScene.setAttribute('visible', 'true');
                     lobbyScene.setAttribute('position', '0 0 0');
                     
-                    if (bgmPlayer && bgmPlayer.components && bgmPlayer.components.sound) {
-                        bgmPlayer.components.sound.stopSound();
-                    }
+                    if (bgmPlayer && bgmPlayer.components && bgmPlayer.components.sound) bgmPlayer.components.sound.stopSound();
+                    
                     const areaUI = document.getElementById('area-display');
                     if (areaUI) areaUI.style.display = 'none';
-                    
                     const billboardText = document.getElementById('billboard-text');
                     if (billboardText) billboardText.setAttribute('value', 'Ready to scan');
-
                     if(hudLoadingText) hudLoadingText.setAttribute('value', '');
 
                     if (pen) {
@@ -144,13 +154,11 @@
                         if (penComp) {
                             if (penComp.isGrabbedVR) penComp.dropVR();
                             if (penComp.isGrabbedDesktop) penComp.dropDesktop();
-                            
                             penComp.isGrabbedVR = false;
                             penComp.isGrabbedDesktop = false;
                             penComp.isFiring = false;
                             penComp.wasFiring = false;
                             penComp.grabbedBy = null;
-                            
                             if (penComp.deactivateLaser) penComp.deactivateLaser();
                             if (penComp.clearPreviewPoints) penComp.clearPreviewPoints();
                             if (penComp.hitInstancedMesh) {
@@ -158,22 +166,11 @@
                                 penComp.hitInstancedMesh.instanceMatrix.needsUpdate = true;
                             }
                         }
-
                         mainScene.object3D.add(pen.object3D);
-
                         pen.setAttribute('visible', 'false');
                         pen.object3D.visible = false;
-
                         pen.setAttribute('position', '1 1.04 -1.5');
                         pen.setAttribute('rotation', '-90 0 0');
-
-                        if (pen.body) {
-                            pen.body.position.set(1, 1.04, -1.5);
-                            pen.body.velocity.set(0, 0, 0);
-                            pen.body.angularVelocity.set(0, 0, 0);
-                            const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI/2, 0, 0));
-                            pen.body.quaternion.set(q.x, q.y, q.z, q.w);
-                        }
                     }
 
                     [leftHand, rightHand].forEach(hand => {
@@ -220,9 +217,8 @@
             <img id="grid-texture" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI1MTIiIGhlaWdodD0iNTEyIj48cmVjdCB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgZmlsbD0iI0ZGRkZGRiIvPjxwYXRoIGQ9Ik0wIDBoNTEydjUxMkgweiIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjIiLz48cGF0aCBkPSJNMCA1MS4yaDUxMk0wIDEwMi40aDUxMk0wIDE1My42aDUxMk0wIDIwNC44aDUxMk0wIDI1Nmg1MTJNMCAzMDcuMmg1MTJNMCAzNTguNGg1MTJNMCA4MDkuNmg1MTJNMCA0NjAuOGg1MTJNNTEuMiAwdjUxMk0xMDIuNCAwdjUxMk0xNTMuNiAwdjUxMk0yMDQuOCAwdjUxMk0yNTYgMHY1MTJNMzA3LjIgMHY1MTJNMzU4LjQgMHY1MTJNNDA5LjYgMHY1MTJNNDYwLjggMHY1MTIiIHN0cm9rZT0iI0NDQ0NDQyIgc3Ryb2tlLXdpZHRoPSIzIi8+PC9zdmc+">
             <a-asset-item id="pen-model" src="assets/LaserPointer.glb"></a-asset-item>
             <a-asset-item id="human-body-model" src="assets/human_body.glb"></a-asset-item>
-            
-            <!-- 🌟 修正：精準對應大寫的 Child.glb 檔名，並設定 ID 為 child-model -->
             <a-asset-item id="child-model" src="assets/Child.glb"></a-asset-item>
+            <a-asset-item id="case2-model" src="assets/Case2.glb"></a-asset-item>
             
             <audio id="bgm" src="assets/music/Background music.mp3" preload="auto" loop="true"></audio>
             <img id="tutorial-img" src="assets/images/tutorial.jpeg">
@@ -233,10 +229,8 @@
         <a-light id="ambient-light" type="ambient" color="#FFFFFF"></a-light>
         <a-light type="directional" position="1 2 1" intensity="0.8" castShadow="true"></a-light>
         <a-sky id="environment-sky" color="#E8E8ED"></a-sky>
-
         <a-entity id="bgm-player" sound="src: #bgm; loop: true; volume: 0.4"></a-entity>
 
-        <!-- 第一階段：VR 等待室 (Lobby Scene) -->
         <a-entity id="lobby-scene" vr-scene-manager>
             <a-entity id="vr-tutorial-board" position="0 1.6 -2.5">
                 <a-image src="#rounded-board" width="3.5" height="4.0" position="0 0 0" material="alphaTest: 0.5"></a-image>
@@ -249,34 +243,19 @@
             </a-entity>
         </a-entity>
 
-        <!-- 第二階段：主場景 -->
         <a-entity id="main-scene" visible="false">
-            <a-plane position="0 0 0" rotation="-90 0 0" width="20" height="20" color="#7BC8A4" shadow static-body></a-plane>
-            <a-box position="1 0.5 -1.5" width="4" height="1" depth="1" color="#8B4513" shadow static-body></a-box>
-            <a-box position="-2.5 0.5 -1.5" width="2" height="1" depth="1" color="#5C4033" shadow static-body></a-box>
+            <a-plane class="teleportable" position="0 0 0" rotation="-90 0 0" width="20" height="20" color="#7BC8A4" shadow static-body></a-plane>
+            <a-box class="teleportable" position="1 0.5 -1.5" width="4" height="1" depth="1" color="#8B4513" shadow static-body></a-box>
+            <a-box class="teleportable" position="-2.5 0.5 -1.5" width="2" height="1" depth="1" color="#5C4033" shadow static-body></a-box>
 
-            <a-entity position="-0.4 1.25 -1.5" rotation="25 35 0">
-                <a-box class="target" width="0.3" height="0.3" depth="0.3" color="#FFFFFF" material="src: #grid-texture; repeat: 1 1;" shadow static-body></a-box>
-            </a-entity>
-            <a-entity position="0.4 1.25 -1.5" rotation="25 35 0">
-                <a-box class="target" width="0.3" height="0.3" depth="0.3" color="#4CC3D9" shadow static-body></a-box>
-            </a-entity>
-            <a-entity position="1.4 1.25 -1.5" rotation="25 -20 15">
-                <a-cylinder class="target" radius="0.15" height="0.3" color="#FFFFFF" material="src: #grid-texture; repeat: 2 1;" shadow static-body></a-cylinder>
-            </a-entity>
-            <a-entity position="2.2 1.25 -1.5" rotation="25 -20 15">
-                <a-cylinder class="target" radius="0.15" height="0.3" color="#FF99CC" shadow static-body></a-cylinder>
-            </a-entity>
+            <a-entity position="-0.4 1.25 -1.5" rotation="25 35 0"><a-box class="target" width="0.3" height="0.3" depth="0.3" color="#FFFFFF" material="src: #grid-texture; repeat: 1 1;" shadow static-body></a-box></a-entity>
+            <a-entity position="0.4 1.25 -1.5" rotation="25 35 0"><a-box class="target" width="0.3" height="0.3" depth="0.3" color="#4CC3D9" shadow static-body></a-box></a-entity>
+            <a-entity position="1.4 1.25 -1.5" rotation="25 -20 15"><a-cylinder class="target" radius="0.15" height="0.3" color="#FFFFFF" material="src: #grid-texture; repeat: 2 1;" shadow static-body></a-cylinder></a-entity>
+            <a-entity position="2.2 1.25 -1.5" rotation="25 -20 15"><a-cylinder class="target" radius="0.15" height="0.3" color="#FF99CC" shadow static-body></a-cylinder></a-entity>
             
-            <!-- human_body (維持在 X: 2.5) -->
-            <a-entity position="4 0 0" rotation="0 -90 0">
-                <a-entity class="target" gltf-model="#human-body-model" scale="1 1 1" shadow raycast-optimized></a-entity>
-            </a-entity>
-
-            <!-- 🌟 Child 模型：對應剛設定好的 child-model ID (維持在 X: 4.0) -->
-            <a-entity position="4 0 2" rotation="0 -90 0">
-                <a-entity class="target" gltf-model="#child-model" scale="1 1 1" shadow raycast-optimized></a-entity>
-            </a-entity>
+            <a-entity position="4 0 0" rotation="0 -90 0"><a-entity class="target" gltf-model="#human-body-model" scale="1 1 1" shadow raycast-optimized></a-entity></a-entity>
+            <a-entity position="4 0 2" rotation="0 -90 0"><a-entity class="target" gltf-model="#child-model" scale="1 1 1" shadow raycast-optimized></a-entity></a-entity>
+            <a-entity position="4 0 4" rotation="0 -90 0"><a-entity class="target" gltf-model="#case2-model" scale="1 1 1" shadow raycast-optimized></a-entity></a-entity>
 
             <a-dodecahedron class="target" position="-2.5 1.3 -1.5" radius="0.4" color="#FFD700" shadow static-body></a-dodecahedron>
             <a-cylinder class="target" position="-1.7 1.3 -1.5" radius="0.3" height="0.6" color="#FF6347" shadow static-body></a-cylinder>
@@ -296,30 +275,21 @@
             </a-entity>
         </a-entity>
 
-        <!-- 控制器與視角 -->
         <a-entity id="rig" position="0 0 0" hybrid-locomotion>
-            <a-camera position="0 1.6 0" look-controls="pointerLockEnabled: true" wasd-controls="enabled: false">
-                <a-entity id="desktop-cursor"
-                          cursor="fuse: false; rayOrigin: entity;"
-                          position="0 0 -1"
-                          geometry="primitive: ring; radiusInner: 0.015; radiusOuter: 0.025"
-                          material="color: white; shader: flat; opacity: 0.5"
-                          raycaster="objects: .interactable">
-                </a-entity>
+            <a-camera id="head" position="0 1.6 0" look-controls="pointerLockEnabled: true" wasd-controls="enabled: false">
+                <a-entity id="desktop-cursor" cursor="fuse: false; rayOrigin: entity;" position="0 0 -1" geometry="primitive: ring; radiusInner: 0.015; radiusOuter: 0.025" material="color: white; shader: flat; opacity: 0.5" raycaster="objects: .interactable"></a-entity>
                 <a-text id="hud-loading-text" value="" position="0 0 -0.5" align="center" width="0.8" color="#000000" opacity="0.9"></a-text>
             </a-camera>
 
-            <a-entity id="left-hand" 
-                      hand-controls="hand: left; handModelStyle: highPoly; color: #ffccaa"
-                      hand-model-offset="x: 28">
+            <a-entity id="left-hand" hand-controls="hand: left; handModelStyle: highPoly; color: #ffccaa" hand-model-offset="x: 50; y: -20; z: 0">
                  <a-entity class="hand-ray" position="-0.02 0.013 -0.055" rotation="-50 0 0" raycaster="objects: .interactable; showLine: true; far: 5; lineColor: cyan; lineOpacity: 0.5" cursor="rayOrigin: entity"></a-entity>
             </a-entity>
             
-            <a-entity id="right-hand" 
-                      hand-controls="hand: right; handModelStyle: highPoly; color: #ffccaa"
-                      hand-model-offset="x: 28">
+            <a-entity id="right-hand" hand-controls="hand: right; handModelStyle: highPoly; color: #ffccaa" hand-model-offset="x: 50; y: 20; z: 0">
                 <a-entity class="hand-ray" position="0.02 0.013 -0.055" rotation="-50 0 0" raycaster="objects: .interactable; showLine: true; far: 5; lineColor: cyan; lineOpacity: 0.5" cursor="rayOrigin: entity"></a-entity>
             </a-entity>
+
+            <a-entity id="teleport-rig" oculus-touch-controls="hand: right; model: false" blink-controls="cameraRig: #rig; teleportOrigin: #head; collisionEntities: .teleportable; button: thumbstick; hitCylinderColor: #00FF66; curveTint: #00FF66"></a-entity>
         </a-entity>
     </a-scene>
 </body>
