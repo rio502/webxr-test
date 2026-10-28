@@ -20,30 +20,38 @@ AFRAME.registerComponent('hybrid-locomotion', {
             const leftHand = document.querySelector('#left-hand');
             const rightHand = document.querySelector('#right-hand');
             
+            // 🌟 獨立抽取出「左手事件處理邏輯」（專職負責前後左右的平移）
+            const handleLeftAxis = (evt) => { 
+                this.leftX = evt.detail.x; 
+                this.leftY = evt.detail.y; 
+            };
+
+            // 🌟 獨立抽取出「右手事件處理邏輯」（專職負責轉向，忽略 Y 軸數值）
+            const handleRightAxis = (evt) => { 
+                this.rightX = evt.detail.x;
+
+                if (Math.abs(this.rightX) < 0.2) {
+                    this.canSnapTurn = true; 
+                } else if (this.canSnapTurn) {
+                    if (this.rightX > 0.6) {
+                        this.el.object3D.rotation.y -= THREE.MathUtils.degToRad(this.data.snapAngle);
+                        this.canSnapTurn = false;
+                    } else if (this.rightX < -0.6) {
+                        this.el.object3D.rotation.y += THREE.MathUtils.degToRad(this.data.snapAngle);
+                        this.canSnapTurn = false;
+                    }
+                }
+            };
+
             if (leftHand) {
-                // 🌟 左手：專職負責前後左右的平移
-                leftHand.addEventListener('thumbstickmoved', (evt) => { 
-                    this.leftX = evt.detail.x; 
-                    this.leftY = evt.detail.y; 
-                });
+                // 🌟 讓左手同時聽懂 Quest 搖桿 (thumbstick) 與 VIVE 觸控板 (trackpad)
+                leftHand.addEventListener('thumbstickmoved', handleLeftAxis);
+                leftHand.addEventListener('trackpadmoved', handleLeftAxis);
             }
             if (rightHand) {
-                // 🌟 右手：專職負責轉向，忽略 Y 軸數值
-                rightHand.addEventListener('thumbstickmoved', (evt) => { 
-                    this.rightX = evt.detail.x;
-
-                    if (Math.abs(this.rightX) < 0.2) {
-                        this.canSnapTurn = true; 
-                    } else if (this.canSnapTurn) {
-                        if (this.rightX > 0.6) {
-                            this.el.object3D.rotation.y -= THREE.MathUtils.degToRad(this.data.snapAngle);
-                            this.canSnapTurn = false;
-                        } else if (this.rightX < -0.6) {
-                            this.el.object3D.rotation.y += THREE.MathUtils.degToRad(this.data.snapAngle);
-                            this.canSnapTurn = false;
-                        }
-                    }
-                });
+                // 🌟 讓右手同時聽懂 Quest 搖桿 (thumbstick) 與 VIVE 觸控板 (trackpad)
+                rightHand.addEventListener('thumbstickmoved', handleRightAxis);
+                rightHand.addEventListener('trackpadmoved', handleRightAxis);
             }
         };
 
