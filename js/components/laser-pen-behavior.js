@@ -7,6 +7,9 @@ AFRAME.registerComponent('laser-pen-behavior', {
         this.wasFiring = false; 
         this.grabbedBy = null; 
         
+        this.lastFireTime = 0;
+        this.fireInterval = 25; 
+
         this.onHoverEnter = this.onHoverEnter.bind(this);
         this.onHoverLeave = this.onHoverLeave.bind(this);
         this.onKeyDown = this.onKeyDown.bind(this);
@@ -92,6 +95,7 @@ AFRAME.registerComponent('laser-pen-behavior', {
                 this.lastRayOrigin = null;
                 this.lastRayDirection = null;
                 this.lastHitNormal = null;
+                this.lastHitObject = null;
             };
 
             this.clearPreviewPoints();
@@ -99,7 +103,7 @@ AFRAME.registerComponent('laser-pen-behavior', {
 
             this.maxHits = 40000; 
             const paintGeo = new THREE.BoxGeometry(1, 1, 0.002); 
-            const paintMat = new THREE.MeshBasicMaterial({ color: 0x008cba, transparent: true, opacity: 0.05, depthTest: true, depthWrite: false });
+            const paintMat = new THREE.MeshBasicMaterial({ color: 0x008cba, transparent: true, opacity: 0.2, depthTest: true, depthWrite: false }); // 透明度調高一點讓格子更清楚
             this.hitInstancedMesh = new THREE.InstancedMesh(paintGeo, paintMat, this.maxHits);
             this.hitInstancedMesh.frustumCulled = false; 
             this.hitInstancedMesh.count = 0; 
@@ -152,10 +156,7 @@ AFRAME.registerComponent('laser-pen-behavior', {
         this.deactivateLaser();
     },
 
-    onHoverEnter: function () {
-        if (this.isGrabbedDesktop || this.isGrabbedVR) return;
-        this.isHovered = true;
-    },
+    onHoverEnter: function () { if (this.isGrabbedDesktop || this.isGrabbedVR) return; this.isHovered = true; },
     onHoverLeave: function () { this.isHovered = false; },
     onKeyDown: function (e) {
         if (e.key.toLowerCase() === 'e') {
@@ -183,7 +184,6 @@ AFRAME.registerComponent('laser-pen-behavior', {
         this.deactivateLaser();
     },
 
-    // 🌟 降頻救星：加了 interval: 50 讓射線不要隨時在 50 萬面的模型上瘋狂計算
     activateLaser: function () {
         this.raycasterEntity.setAttribute('raycaster', 'showLine: true; near: 0; far: 20; interval: 50; objects: .target; lineColor: red; lineOpacity: 0.8');
         this.raycasterEntity.setAttribute('cursor', 'rayOrigin: entity; defaultCursor: true');
@@ -207,7 +207,11 @@ AFRAME.registerComponent('laser-pen-behavior', {
         if (this.hasLoaded) {
             if (this.isFiring) {
                 if (!this.wasFiring) this.startDrawing();
-                this.fireLaser();
+                
+                if (time - this.lastFireTime > this.fireInterval) {
+                    this.fireLaser();
+                    this.lastFireTime = time;
+                }
             } else {
                 if (this.wasFiring) this.stopDrawing();
             }
@@ -249,9 +253,8 @@ AFRAME.registerComponent('laser-pen-behavior', {
             this.smoothedRayOrigin = rawOrigin.clone();
             this.smoothedRayDirection = rawDirection.clone();
         } else {
-            const smoothFactor = 0.15; 
-            this.smoothedRayOrigin.lerp(rawOrigin, smoothFactor);
-            this.smoothedRayDirection.lerp(rawDirection, smoothFactor).normalize();
+            this.smoothedRayOrigin.lerp(rawOrigin, 0.2);
+            this.smoothedRayDirection.lerp(rawDirection, 0.2).normalize();
         }
 
         let targetMeshes = [];
@@ -279,6 +282,7 @@ AFRAME.registerComponent('laser-pen-behavior', {
         const hitNormal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).normalize();
         const offsetPoint = hit.point.clone().addScaledVector(hitNormal, 0.003);
 
+        // 🌟 修正：加回輕量級插補，確保藍線不會浮出體外
         if (this.lastHitPoint && this.lastRayOrigin && this.lastRayDirection && this.lastHitNormal) {
             const dist = this.lastHitPoint.distanceTo(offsetPoint);
             if (dist > 0.004 && dist < 0.15) {
@@ -424,7 +428,8 @@ AFRAME.registerComponent('laser-pen-behavior', {
         minX -= marginX; maxX += marginX;
         minY -= marginY; maxY += marginY;
 
-        const resolution = 20; 
+        // 🌟 效能大加速：解析度降至 15 (比 20 快很多，又不會太過粗糙)
+        const resolution = 15; 
         let indexX = 0;
         let indexY = 0;
 
@@ -484,7 +489,8 @@ AFRAME.registerComponent('laser-pen-behavior', {
                             totalAreaSqMeters += trueSurfacePatchArea;
 
                             if (hitCount < this.maxHits) {
-                                this.dummy.scale.set(patchWidth * 3.5, patchHeight * 3.5, 1);
+                                // 🌟 範圍精準化：把 4.5 倍縮小為 1.1 倍，確保塗色絕對不超出你畫的線！
+                                this.dummy.scale.set(patchWidth * 1.1, patchHeight * 1.1, 1);
                                 this.dummy.position.copy(hit.point);
                                 this.dummy.position.addScaledVector(normal, 0.002); 
                                 this.dummy.quaternion.setFromUnitVectors(new THREE.Vector3(0,0,1), normal);

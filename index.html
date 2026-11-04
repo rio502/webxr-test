@@ -16,7 +16,6 @@
     <!-- 🌟 BVH 空間樹加速引擎 -->
     <script src="https://unpkg.com/three-mesh-bvh@0.7.3/build/index.umd.js"></script>
     <script>
-        // 🌟 修正：一載入套件就立刻強行綁定到 THREE 核心，確保 BVH 絕對不會失敗
         if (window.MeshBVH) {
             THREE.BufferGeometry.prototype.computeBoundsTree = window.MeshBVH.computeBoundsTree;
             THREE.BufferGeometry.prototype.disposeBoundsTree = window.MeshBVH.disposeBoundsTree;
@@ -54,8 +53,25 @@
                                 }
                             }
                         });
-                        
                         console.warn(`[效能健檢] ${modelName} | 面數: ${Math.round(polyCount).toLocaleString()} | BVH加速: ${bvhSuccess ? '成功 ✅' : '失敗 ❌'}`);
+                    }
+                });
+            }
+        });
+
+        // 🌟 新增：隱形碰撞網格組件 (讓低模物理存在，但肉眼隱形)
+        AFRAME.registerComponent('invisible-collider', {
+            init: function () {
+                this.el.addEventListener('model-loaded', () => {
+                    const mesh = this.el.getObject3D('mesh');
+                    if (mesh) {
+                        mesh.traverse((node) => {
+                            if (node.isMesh) {
+                                node.material.transparent = true;
+                                node.material.opacity = 0;
+                                node.material.depthWrite = false;
+                            }
+                        });
                     }
                 });
             }
@@ -218,7 +234,12 @@
             <a-asset-item id="pen-model" src="assets/LaserPointer.glb"></a-asset-item>
             <a-asset-item id="human-body-model" src="assets/human_body.glb"></a-asset-item>
             <a-asset-item id="child-model" src="assets/Child.glb"></a-asset-item>
-            <a-asset-item id="case2-model" src="assets/Case2.glb"></a-asset-item>
+            
+            <!-- 🌟 修改：分別載入 Case2 的高面數與低面數版本 -->
+            <a-asset-item id="case2-high" src="assets/Case2_High.glb"></a-asset-item>
+            <a-asset-item id="case2-low" src="assets/Case2_Low.glb"></a-asset-item>
+            
+            <a-asset-item id="case-model" src="assets/Case.glb"></a-asset-item>
             
             <audio id="bgm" src="assets/music/Background music.mp3" preload="auto" loop="true"></audio>
             <img id="tutorial-img" src="assets/images/tutorial.jpeg">
@@ -255,7 +276,16 @@
             
             <a-entity position="4 0 0" rotation="0 -90 0"><a-entity class="target" gltf-model="#human-body-model" scale="1 1 1" shadow raycast-optimized></a-entity></a-entity>
             <a-entity position="4 0 2" rotation="0 -90 0"><a-entity class="target" gltf-model="#child-model" scale="1 1 1" shadow raycast-optimized></a-entity></a-entity>
-            <a-entity position="4 0 4" rotation="0 -90 0"><a-entity class="target" gltf-model="#case2-model" scale="1 1 1" shadow raycast-optimized></a-entity></a-entity>
+            
+            <!-- 🌟 替換：Case2 雙模疊加測試 (位置 Z=4) -->
+            <a-entity position="4 0 4" rotation="0 -90 0">
+                <!-- 👁️ 視覺高模：保留精細外觀。不加 target，雷射會直接穿透 -->
+                <a-entity gltf-model="#case2-high" scale="1 1 1" shadow></a-entity>
+                <!-- 🎯 碰撞低模：負責雷射碰撞。加上 target 與 invisible-collider 隱形組件 -->
+                <a-entity class="target" gltf-model="#case2-low" scale="1 1 1" raycast-optimized invisible-collider></a-entity>
+            </a-entity>
+            
+            <a-entity position="4 0 6" rotation="0 -90 0"><a-entity class="target" gltf-model="#case-model" scale="1 1 1" shadow raycast-optimized></a-entity></a-entity>
 
             <a-dodecahedron class="target" position="-2.5 1.3 -1.5" radius="0.4" color="#FFD700" shadow static-body></a-dodecahedron>
             <a-cylinder class="target" position="-1.7 1.3 -1.5" radius="0.3" height="0.6" color="#FF6347" shadow static-body></a-cylinder>
