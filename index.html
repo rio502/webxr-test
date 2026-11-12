@@ -3,17 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>真實 3D 表面積計算 (無縫塗色版)</title>
+    <title>真實 3D 表面積計算與塗鴉 (究極融合版)</title>
 
     <link rel="stylesheet" href="css/style.css">
 
-    <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
+    <script src="https://aframe.io/releases/1.8.0/aframe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-physics-system@v4.2.2/dist/aframe-physics-system.min.js"></script>
     <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-extras@7.0.0/dist/aframe-extras.min.js"></script>
     <script src="https://unpkg.com/super-hands@3.0.3/dist/super-hands.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/aframe-blink-controls/dist/aframe-blink-controls.min.js"></script>
     
-    <!-- 🌟 BVH 空間樹加速引擎 -->
+    <!-- BVH 空間樹加速引擎 -->
     <script src="https://unpkg.com/three-mesh-bvh@0.7.3/build/index.umd.js"></script>
     <script>
         if (window.MeshBVH) {
@@ -44,7 +44,6 @@
                                     polyCount += child.geometry.attributes.position.count / 3;
                                 }
 
-                                // 建立 BVH 空間樹
                                 if (child.geometry.computeBoundsTree) {
                                     try {
                                         child.geometry.computeBoundsTree();
@@ -59,18 +58,13 @@
             }
         });
 
-        // 🌟 新增：隱形碰撞網格組件 (讓低模物理存在，但肉眼隱形)
         AFRAME.registerComponent('invisible-collider', {
             init: function () {
                 this.el.addEventListener('model-loaded', () => {
                     const mesh = this.el.getObject3D('mesh');
                     if (mesh) {
                         mesh.traverse((node) => {
-                            if (node.isMesh) {
-                                node.material.transparent = true;
-                                node.material.opacity = 0;
-                                node.material.depthWrite = false;
-                            }
+                            if (node.isMesh) node.material.visible = false; 
                         });
                     }
                 });
@@ -95,10 +89,444 @@
             }
         });
 
-        AFRAME.registerComponent('vr-scene-manager', {
+        AFRAME.registerComponent('ui-slider-btn', {
+            schema: {
+                target: { type: 'string' },
+                action: { type: 'string' },
+                min: { type: 'number' },
+                max: { type: 'number' },
+                step: { type: 'number' }
+            },
+            init: function() {
+                this.el.addEventListener('mousedown', () => {
+                    const targetEl = document.getElementById(this.data.target);
+                    if (!targetEl) return;
+                    
+                    let currentVal = parseFloat(targetEl.getAttribute('value'));
+                    if (this.data.action === 'increase') {
+                        currentVal = Math.min(this.data.max, currentVal + this.data.step);
+                    } else {
+                        currentVal = Math.max(this.data.min, currentVal - this.data.step);
+                    }
+                    targetEl.setAttribute('value', currentVal.toFixed(1));
+                    
+                    this.el.setAttribute('material', 'color: #00FF66');
+                    setTimeout(() => this.el.setAttribute('material', 'color: #666666'), 150);
+                });
+                
+                this.el.addEventListener('mouseenter', () => this.el.setAttribute('material', 'color: #666666'));
+                this.el.addEventListener('mouseleave', () => this.el.setAttribute('material', 'color: #444444'));
+            }
+        });
+
+        AFRAME.registerComponent('ui-reset-btn', {
+            init: function() {
+                this.el.addEventListener('mousedown', () => {
+                    const dotSize = document.getElementById('dot-size-val');
+                    const spacing = document.getElementById('spacing-val');
+                    
+                    if (dotSize) dotSize.setAttribute('value', '1.0');
+                    if (spacing) spacing.setAttribute('value', '1.5');
+                    
+                    this.el.setAttribute('material', 'color: #00FF66');
+                    setTimeout(() => this.el.setAttribute('material', 'color: #444444'), 150);
+                });
+                
+                this.el.addEventListener('mouseenter', () => this.el.setAttribute('material', 'color: #666666'));
+                this.el.addEventListener('mouseleave', () => this.el.setAttribute('material', 'color: #444444'));
+            }
+        });
+
+        AFRAME.registerComponent('lazy-follow', {
+            schema: { target: { type: 'selector', default: '#head' }, distance: { type: 'number', default: 3 }, lerpSpeed: { type: 'number', default: 0.05 }, heightOffset: { type: 'number', default: 0 } },
+            init: function () {
+                this.targetObj = this.data.target.object3D;
+                this.currentPos = new THREE.Vector3();
+                this.targetPos = new THREE.Vector3();
+                this.headWorldPos = new THREE.Vector3();
+                this.isFirstTick = true;
+            },
+            tick: function () {
+                if (!this.el.getAttribute('visible')) { this.isFirstTick = true; return; }
+                this.targetObj.getWorldPosition(this.headWorldPos);
+                const forward = new THREE.Vector3(0, 0, -1);
+                forward.transformDirection(this.targetObj.matrixWorld);
+                forward.y = 0;
+                if (forward.lengthSq() > 0.0001) forward.normalize(); else forward.set(0, 0, -1); 
+                this.targetPos.copy(this.headWorldPos);
+                this.targetPos.addScaledVector(forward, this.data.distance);
+                this.targetPos.y = this.headWorldPos.y + this.data.heightOffset;
+                if (this.isFirstTick) { this.currentPos.copy(this.targetPos); this.isFirstTick = false; } else { this.currentPos.lerp(this.targetPos, this.data.lerpSpeed); }
+                this.el.object3D.position.copy(this.currentPos);
+                this.el.object3D.lookAt(new THREE.Vector3(this.headWorldPos.x, this.currentPos.y, this.headWorldPos.z));
+            }
+        });
+
+        // 🌟 【融合版】保留同事的外觀設定，換上能用橡皮擦的管狀網格引擎
+        AFRAME.registerComponent('doodle-pen-behavior', {
+            init: function () {
+                this.isGrabbedVR = false;
+                this.isGrabbedDesktop = false;
+                this.isHovered = false;
+                this.isDrawing = false;
+                this.grabbedBy = null;
+                
+                this.lastFireTime = 0;
+                this.fireInterval = 20; 
+
+                this.onHoverEnter = this.onHoverEnter.bind(this);
+                this.onHoverLeave = this.onHoverLeave.bind(this);
+                this.onKeyDown = this.onKeyDown.bind(this);
+                this.onMouseDown = this.onMouseDown.bind(this);
+                this.onMouseUp = this.onMouseUp.bind(this);
+                
+                this.onVRGripDown = this.onVRGripDown.bind(this);
+                this.onVRGripUp = this.onVRGripUp.bind(this);
+                this.onVRTriggerDown = this.onVRTriggerDown.bind(this);
+                this.onVRTriggerUp = this.onVRTriggerUp.bind(this);
+
+                this.el.addEventListener('mouseenter', this.onHoverEnter);
+                this.el.addEventListener('mouseleave', this.onHoverLeave);
+
+                window.addEventListener('keydown', this.onKeyDown);
+                window.addEventListener('mousedown', this.onMouseDown);
+                window.addEventListener('mouseup', this.onMouseUp);
+
+                // 筆尖
+                this.tipEntity = document.createElement('a-entity');
+                this.tipEntity.setAttribute('position', '0 0.15 0'); 
+                this.el.appendChild(this.tipEntity);
+
+                const pos = this.el.getAttribute('position');
+                const rot = this.el.getAttribute('rotation');
+                this.originalPosition = { x: pos.x, y: pos.y, z: pos.z };
+                this.originalRotation = { x: rot.x, y: rot.y, z: rot.z };
+                
+                this.lastPoint = null;
+                this.lines = []; // 管狀網格存放處，給橡皮擦偵測用
+                this.currentPoints = [];
+                this.currentLineMesh = null;
+
+                const bindHandEvents = () => {
+                    const leftHand = document.querySelector('#left-hand');
+                    const rightHand = document.querySelector('#right-hand');
+                    if(leftHand) {
+                        leftHand.addEventListener('gripdown', (e) => this.onVRGripDown(e, leftHand));
+                        leftHand.addEventListener('gripup', (e) => this.onVRGripUp(e, leftHand));
+                        leftHand.addEventListener('triggerdown', (e) => this.onVRTriggerDown(e, leftHand));
+                        leftHand.addEventListener('triggerup', (e) => this.onVRTriggerUp(e, leftHand));
+                    }
+                    if(rightHand) {
+                        rightHand.addEventListener('gripdown', (e) => this.onVRGripDown(e, rightHand));
+                        rightHand.addEventListener('gripup', (e) => this.onVRGripUp(e, rightHand));
+                        rightHand.addEventListener('triggerdown', (e) => this.onVRTriggerDown(e, rightHand));
+                        rightHand.addEventListener('triggerup', (e) => this.onVRTriggerUp(e, rightHand));
+                    }
+                };
+
+                if (document.readyState === 'complete') bindHandEvents();
+                else window.addEventListener('load', bindHandEvents);
+
+                this.paintMaterial = new THREE.MeshBasicMaterial({ 
+                    color: 0x00FF00, // 綠色
+                    side: THREE.DoubleSide
+                });
+                this.hasLoaded = true;
+            },
+
+            onVRGripDown: function(evt, hand) { if (!this.isGrabbedVR && !this.isGrabbedDesktop && this.isHovered) this.pickupVR(hand); },
+            onVRGripUp: function(evt, hand) { if (this.isGrabbedVR && this.grabbedBy === hand) this.dropVR(); },
+            onVRTriggerDown: function(evt, hand) { if(this.isGrabbedVR && this.grabbedBy === hand) this.startDrawing(); },
+            onVRTriggerUp: function(evt, hand) { if(this.isGrabbedVR && this.grabbedBy === hand) this.stopDrawing(); },
+
+            pickupVR: function(hand) {
+                this.isGrabbedVR = true; this.grabbedBy = hand; this.isHovered = false;
+                this.el.removeAttribute('dynamic-body');
+                this.el.setAttribute('position', '0 0.02 -0.06'); 
+                this.el.setAttribute('rotation', '-135 0 0'); 
+                hand.object3D.add(this.el.object3D);
+                const handMesh = hand.getObject3D('mesh');
+                if (handMesh) handMesh.visible = false;
+                const handRay = hand.querySelector('.hand-ray');
+                if (handRay) { handRay.setAttribute('raycaster', 'showLine', false); handRay.setAttribute('raycaster', 'enabled', false); }
+            },
+            
+            dropVR: function() {
+                if (this.grabbedBy) {
+                    const handMesh = this.grabbedBy.getObject3D('mesh');
+                    if (handMesh) handMesh.visible = true;
+                    const handRay = this.grabbedBy.querySelector('.hand-ray');
+                    if (handRay) { handRay.setAttribute('raycaster', 'showLine', true); handRay.setAttribute('raycaster', 'enabled', true); }
+                }
+                this.isGrabbedVR = false; this.isDrawing = false; this.grabbedBy = null;
+                this.el.sceneEl.object3D.add(this.el.object3D);
+                this.el.setAttribute('position', this.originalPosition);
+                this.el.setAttribute('rotation', this.originalRotation); 
+                this.el.setAttribute('dynamic-body', 'shape: box; mass: 0.5; linearDamping: 0.8; angularDamping: 0.8');
+                this.stopDrawing();
+            },
+
+            onHoverEnter: function () { if (this.isGrabbedDesktop || this.isGrabbedVR) return; this.isHovered = true; },
+            onHoverLeave: function () { this.isHovered = false; },
+            onKeyDown: function (e) {
+                if (e.key.toLowerCase() === 'e') {
+                    if (!this.isGrabbedDesktop && this.isHovered && !this.isGrabbedVR) this.pickupDesktop();
+                    else if (this.isGrabbedDesktop) this.dropDesktop();
+                }
+                // 保留 R 鍵全部清空功能，當作防呆
+                if (e.key.toLowerCase() === 'r' && this.isGrabbedDesktop) this.clearDrawing();
+            },
+            onMouseDown: function (e) { if (e.button === 0 && this.isGrabbedDesktop) this.startDrawing(); },
+            onMouseUp: function (e) { if (e.button === 0 && this.isGrabbedDesktop) this.stopDrawing(); },
+
+            pickupDesktop: function () { this.isGrabbedDesktop = true; this.isHovered = false; this.el.removeAttribute('dynamic-body'); },
+            dropDesktop: function () {
+                this.isGrabbedDesktop = false; this.isDrawing = false;
+                this.el.setAttribute('position', this.originalPosition);
+                this.el.setAttribute('rotation', this.originalRotation); 
+                this.el.setAttribute('dynamic-body', 'shape: box; mass: 0.5; linearDamping: 0.8; angularDamping: 0.8');
+                this.stopDrawing();
+            },
+
+            tick: function (time, timeDelta) {
+                if (this.isGrabbedDesktop) {
+                    const camera = document.querySelector('a-camera');
+                    const cam3D = camera.object3D;
+                    const offset = new THREE.Vector3(0.3, -0.3, -0.5);
+                    offset.applyMatrix4(cam3D.matrixWorld);
+                    this.el.object3D.position.copy(offset);
+                    this.el.object3D.quaternion.copy(cam3D.quaternion);
+                    this.el.object3D.rotateX(-Math.PI / 2); 
+                }
+
+                if (this.hasLoaded && this.isDrawing) {
+                    if (time - this.lastFireTime > this.fireInterval) {
+                        this.drawStroke();
+                        this.lastFireTime = time;
+                    }
+                }
+            },
+            
+            startDrawing: function() {
+                this.isDrawing = true;
+                this.currentPoints = [];
+                this.lastPoint = null;
+                this.currentLineMesh = null;
+            },
+
+            stopDrawing: function() {
+                this.isDrawing = false;
+                this.lastPoint = null;
+            },
+
+            drawStroke: function () {
+                const tipPos = new THREE.Vector3();
+                this.tipEntity.object3D.getWorldPosition(tipPos);
+
+                if (this.lastPoint && this.lastPoint.distanceTo(tipPos) < 0.005) return;
+
+                this.currentPoints.push(tipPos.clone());
+                this.lastPoint = tipPos.clone();
+
+                if (this.currentPoints.length >= 2) {
+                    const curve = new THREE.CatmullRomCurve3(this.currentPoints);
+                    // 管徑設為 0.005
+                    const geometry = new THREE.TubeGeometry(curve, this.currentPoints.length * 2, 0.005, 8, false);
+
+                    if (!this.currentLineMesh) {
+                        this.currentLineMesh = new THREE.Mesh(geometry, this.paintMaterial);
+                        this.el.sceneEl.object3D.add(this.currentLineMesh);
+                        this.lines.push(this.currentLineMesh);
+                    } else {
+                        this.currentLineMesh.geometry.dispose();
+                        this.currentLineMesh.geometry = geometry;
+                    }
+                }
+            },
+
+            clearDrawing: function() {
+                this.lines.forEach(mesh => {
+                    this.el.sceneEl.object3D.remove(mesh);
+                    mesh.geometry.dispose();
+                });
+                this.lines = [];
+                this.currentPoints = [];
+                this.currentLineMesh = null;
+                this.lastPoint = null;
+            }
+        });
+
+        // 🌟 實體橡皮擦控制腳本 (精準擦除單一線條)
+        AFRAME.registerComponent('eraser-behavior', {
+            init: function () {
+                this.isGrabbedVR = false;
+                this.isGrabbedDesktop = false;
+                this.isHovered = false;
+                this.grabbedBy = null;
+
+                this.onHoverEnter = this.onHoverEnter.bind(this);
+                this.onHoverLeave = this.onHoverLeave.bind(this);
+                this.onKeyDown = this.onKeyDown.bind(this);
+                this.onMouseDown = this.onMouseDown.bind(this);
+                this.onVRGripDown = this.onVRGripDown.bind(this);
+                this.onVRGripUp = this.onVRGripUp.bind(this);
+                this.onVRTriggerDown = this.onVRTriggerDown.bind(this);
+
+                this.el.addEventListener('mouseenter', this.onHoverEnter);
+                this.el.addEventListener('mouseleave', this.onHoverLeave);
+                window.addEventListener('keydown', this.onKeyDown);
+                window.addEventListener('mousedown', this.onMouseDown);
+
+                const pos = this.el.getAttribute('position');
+                const rot = this.el.getAttribute('rotation');
+                this.originalPosition = { x: pos.x, y: pos.y, z: pos.z };
+                this.originalRotation = { x: rot.x, y: rot.y, z: rot.z };
+
+                const bindHandEvents = () => {
+                    const leftHand = document.querySelector('#left-hand');
+                    const rightHand = document.querySelector('#right-hand');
+                    if(leftHand) {
+                        leftHand.addEventListener('gripdown', (e) => this.onVRGripDown(e, leftHand));
+                        leftHand.addEventListener('gripup', (e) => this.onVRGripUp(e, leftHand));
+                        leftHand.addEventListener('triggerdown', (e) => this.onVRTriggerDown(e, leftHand));
+                    }
+                    if(rightHand) {
+                        rightHand.addEventListener('gripdown', (e) => this.onVRGripDown(e, rightHand));
+                        rightHand.addEventListener('gripup', (e) => this.onVRGripUp(e, rightHand));
+                        rightHand.addEventListener('triggerdown', (e) => this.onVRTriggerDown(e, rightHand));
+                    }
+                };
+                if (document.readyState === 'complete') bindHandEvents();
+                else window.addEventListener('load', bindHandEvents);
+            },
+            onVRGripDown: function(evt, hand) { if (!this.isGrabbedVR && !this.isGrabbedDesktop && this.isHovered) this.pickupVR(hand); },
+            onVRGripUp: function(evt, hand) { if (this.isGrabbedVR && this.grabbedBy === hand) this.dropVR(); },
+            onVRTriggerDown: function(evt, hand) { if(this.isGrabbedVR && this.grabbedBy === hand) this.executeClear(); },
+            
+            pickupVR: function(hand) {
+                this.isGrabbedVR = true; this.grabbedBy = hand; this.isHovered = false;
+                this.el.removeAttribute('dynamic-body');
+                this.el.setAttribute('position', '0 0.02 -0.06');
+                this.el.setAttribute('rotation', '0 0 0');
+                hand.object3D.add(this.el.object3D);
+                const handMesh = hand.getObject3D('mesh');
+                if (handMesh) handMesh.visible = false;
+                const handRay = hand.querySelector('.hand-ray');
+                if (handRay) { handRay.setAttribute('raycaster', 'showLine', false); handRay.setAttribute('raycaster', 'enabled', false); }
+            },
+            dropVR: function() {
+                if (this.grabbedBy) {
+                    const handMesh = this.grabbedBy.getObject3D('mesh');
+                    if (handMesh) handMesh.visible = true;
+                    const handRay = this.grabbedBy.querySelector('.hand-ray');
+                    if (handRay) { handRay.setAttribute('raycaster', 'showLine', true); handRay.setAttribute('raycaster', 'enabled', true); }
+                }
+                this.isGrabbedVR = false; this.grabbedBy = null;
+                this.el.sceneEl.object3D.add(this.el.object3D);
+                this.el.setAttribute('position', this.originalPosition);
+                this.el.setAttribute('rotation', this.originalRotation);
+                this.el.setAttribute('dynamic-body', 'shape: box; mass: 0.5; linearDamping: 0.8; angularDamping: 0.8');
+            },
+            onHoverEnter: function () { if (this.isGrabbedDesktop || this.isGrabbedVR) return; this.isHovered = true; },
+            onHoverLeave: function () { this.isHovered = false; },
+            onKeyDown: function (e) {
+                if (e.key.toLowerCase() === 'e') {
+                    if (!this.isGrabbedDesktop && this.isHovered && !this.isGrabbedVR) this.pickupDesktop();
+                    else if (this.isGrabbedDesktop) this.dropDesktop();
+                }
+            },
+            onMouseDown: function (e) { if (e.button === 0 && this.isGrabbedDesktop) this.executeClear(); },
+            pickupDesktop: function () { this.isGrabbedDesktop = true; this.isHovered = false; this.el.removeAttribute('dynamic-body'); },
+            dropDesktop: function () {
+                this.isGrabbedDesktop = false;
+                this.el.setAttribute('position', this.originalPosition);
+                this.el.setAttribute('rotation', this.originalRotation);
+                this.el.setAttribute('dynamic-body', 'shape: box; mass: 0.5; linearDamping: 0.8; angularDamping: 0.8');
+            },
+            tick: function () {
+                if (this.isGrabbedDesktop) {
+                    const camera = document.querySelector('a-camera');
+                    const cam3D = camera.object3D;
+                    const offset = new THREE.Vector3(0.3, -0.3, -0.5);
+                    offset.applyMatrix4(cam3D.matrixWorld);
+                    this.el.object3D.position.copy(offset);
+                    this.el.object3D.quaternion.copy(cam3D.quaternion);
+                    this.el.object3D.rotateX(-Math.PI / 2);
+                }
+            },
+            
+            // 指哪清哪
+            executeClear: function() {
+                const drawPen = document.getElementById('doodle-pen');
+                if (!drawPen || !drawPen.components['doodle-pen-behavior']) return;
+                const drawPenComp = drawPen.components['doodle-pen-behavior'];
+                const lines = drawPenComp.lines; 
+
+                if (lines.length === 0) return;
+
+                let hitMesh = null; 
+
+                if (this.isGrabbedDesktop) {
+                    // 電腦版從準心發射
+                    const camera = document.querySelector('a-camera').components.camera.camera;
+                    const raycaster = new THREE.Raycaster();
+                    raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+                    
+                    const intersects = raycaster.intersectObjects(lines, false);
+                    if (intersects.length > 0) {
+                        hitMesh = intersects[0].object;
+                    }
+                } else {
+                    // VR版雙重判定 (射線 + 實體周圍)
+                    const raycaster = new THREE.Raycaster();
+                    const origin = new THREE.Vector3();
+                    const direction = new THREE.Vector3(0, 0, -1); 
+                    
+                    this.el.object3D.getWorldPosition(origin);
+                    direction.transformDirection(this.el.object3D.matrixWorld).normalize();
+                    
+                    raycaster.set(origin, direction);
+                    raycaster.far = 10; 
+                    
+                    const intersects = raycaster.intersectObjects(lines, false);
+                    if (intersects.length > 0) {
+                        hitMesh = intersects[0].object; 
+                    } else {
+                        for (let i = 0; i < lines.length; i++) {
+                            const line = lines[i];
+                            if (!line.geometry.boundingBox) line.geometry.computeBoundingBox();
+                            
+                            const box = line.geometry.boundingBox.clone();
+                            box.applyMatrix4(line.matrixWorld);
+                            box.expandByScalar(0.05); 
+                            
+                            if (box.containsPoint(origin)) {
+                                hitMesh = line;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (hitMesh) {
+                    this.el.sceneEl.object3D.remove(hitMesh);
+                    hitMesh.geometry.dispose();
+                    const index = lines.indexOf(hitMesh);
+                    if (index > -1) {
+                        lines.splice(index, 1);
+                    }
+                    
+                    if (this.grabbedBy && this.grabbedBy.components['haptics']) {
+                        this.grabbedBy.components.haptics.pulse(1, 100);
+                    }
+                }
+            }
+        });
+
+       AFRAME.registerComponent('vr-scene-manager', {
             init: function() {
                 const startBtn = document.getElementById('vr-start-btn');
-                const lobbyScene = document.getElementById('lobby-scene');
+                const menuContainer = document.getElementById('menu-container'); 
                 const mainScene = document.getElementById('main-scene');
                 const sky = document.getElementById('environment-sky');
                 const ambientLight = document.getElementById('ambient-light');
@@ -106,17 +534,45 @@
                 const hudLoadingText = document.getElementById('hud-loading-text');
                 const leftHand = document.getElementById('left-hand');
                 const rightHand = document.getElementById('right-hand');
-                const pen = document.getElementById('laser-pen');
                 
-                startBtn.addEventListener('mousedown', () => {
-                    lobbyScene.setAttribute('visible', 'false');
-                    lobbyScene.setAttribute('position', '0 -999 0');
-                    mainScene.setAttribute('visible', 'true');
-                    
-                    if (pen) {
-                        pen.setAttribute('visible', 'true');
-                        pen.object3D.visible = true;
+                const pen = document.getElementById('laser-pen');
+                const doodlePen = document.getElementById('doodle-pen'); 
+                const eraserTool = document.getElementById('eraser-tool'); 
+                
+                const rig = document.getElementById('rig');
+                const head = document.getElementById('head');
+                
+                const savedRigPosition = new THREE.Vector3();
+                const savedRigRotation = new THREE.Euler();
+                let isFirstTimeEntering = true; 
+
+                const resetPlayerPosition = () => {
+                    if (rig && head) {
+                        rig.object3D.position.set(0, 0, 0);
+                        rig.object3D.rotation.set(0, 0, 0);
+                        rig.object3D.updateMatrixWorld(true);
+                        const headEuler = new THREE.Euler().setFromQuaternion(head.object3D.quaternion, 'YXZ');
+                        rig.object3D.rotation.set(0, -headEuler.y, 0);
+                        rig.object3D.updateMatrixWorld(true);
+                        const headWorldPos = new THREE.Vector3();
+                        head.object3D.getWorldPosition(headWorldPos);
+                        rig.object3D.position.x = -headWorldPos.x;
+                        rig.object3D.position.z = -headWorldPos.z;
+                        const lookControls = head.components['look-controls'];
+                        if (lookControls) lookControls.pitchObject.rotation.x = 0;
                     }
+                };
+
+                startBtn.addEventListener('mousedown', () => {
+                    menuContainer.setAttribute('visible', 'false'); 
+                    mainScene.setAttribute('visible', 'true');
+                    if (isFirstTimeEntering) { resetPlayerPosition(); isFirstTimeEntering = false; } else {
+                        if (rig) { rig.object3D.position.copy(savedRigPosition); rig.object3D.rotation.copy(savedRigRotation); rig.object3D.updateMatrixWorld(true); }
+                    }
+                    if (pen) { pen.setAttribute('visible', 'true'); pen.object3D.visible = true; }
+                    if (doodlePen) { doodlePen.setAttribute('visible', 'true'); doodlePen.object3D.visible = true; } 
+                    if (eraserTool) { eraserTool.setAttribute('visible', 'true'); eraserTool.object3D.visible = true; } 
+
                     sky.setAttribute('color', '#FFFFFF');
                     ambientLight.setAttribute('color', '#CCC');
                     if (bgmPlayer && bgmPlayer.components && bgmPlayer.components.sound) bgmPlayer.components.sound.playSound();
@@ -132,16 +588,15 @@
                 if (leftHand) {
                     leftHand.addEventListener('xbuttondown', () => {
                         holdTime = 0;
-                        if(hudLoadingText) hudLoadingText.setAttribute('value', 'Returning... 0%');
-
+                        if(hudLoadingText) {
+                            hudLoadingText.setAttribute('value', 'Returning... 0%');
+                            hudLoadingText.setAttribute('color', '#000000');
+                        }
                         progressInterval = setInterval(() => {
                             holdTime += 50;
                             let percent = Math.min(100, Math.floor((holdTime / requiredHoldTime) * 100));
                             if(hudLoadingText) hudLoadingText.setAttribute('value', `Returning... ${percent}%`);
-                            if (holdTime >= requiredHoldTime) {
-                                clearInterval(progressInterval);
-                                executeReturn();
-                            }
+                            if (holdTime >= requiredHoldTime) { clearInterval(progressInterval); executeReturn(); }
                         }, 50);
                     });
                     leftHand.addEventListener('xbuttonup', () => {
@@ -151,19 +606,48 @@
                 }
 
                 function executeReturn() {
+                    if (rig && !isFirstTimeEntering) {
+                        savedRigPosition.copy(rig.object3D.position);
+                        savedRigRotation.copy(rig.object3D.rotation);
+                    }
                     mainScene.setAttribute('visible', 'false');
                     sky.setAttribute('color', '#E8E8ED');
                     ambientLight.setAttribute('color', '#FFFFFF');
-                    lobbyScene.setAttribute('visible', 'true');
-                    lobbyScene.setAttribute('position', '0 0 0');
-                    
+                    menuContainer.setAttribute('visible', 'true');
+                    resetPlayerPosition();
                     if (bgmPlayer && bgmPlayer.components && bgmPlayer.components.sound) bgmPlayer.components.sound.stopSound();
                     
                     const areaUI = document.getElementById('area-display');
-                    if (areaUI) areaUI.style.display = 'none';
+                    if (areaUI) {
+                        areaUI.style.display = 'none';
+                        areaUI.innerHTML = `
+                            <div style="font-size: 0.95em; color: #ddd; margin-bottom: 5px;">
+                                本次掃描: <span style="color:#fff;">0.0 cm²</span>
+                            </div>
+                            <div style="font-size: 1.1em; font-weight: bold; margin-bottom: 8px; border-bottom: 1px solid #555; padding-bottom: 5px;">
+                                總表面積: <span style="color:#00ff66;">0.0 cm²</span>
+                            </div>
+                            <div style="color: #ff4d4d; font-size: 0.9em; margin-bottom: 3px;">■ 3度燒傷 (紅): 0.0 cm²</div>
+                            <div style="color: #ffdd44; font-size: 0.9em; margin-bottom: 3px;">■ 2度燒傷 (黃): 0.0 cm²</div>
+                            <div style="color: #44aaff; font-size: 0.9em;">■ 1度燒傷 (藍): 0.0 cm²</div>
+                        `;
+                    }
+                    
                     const billboardText = document.getElementById('billboard-text');
                     if (billboardText) billboardText.setAttribute('value', 'Ready to scan');
                     if(hudLoadingText) hudLoadingText.setAttribute('value', '');
+                    
+                    const statCurrent = document.getElementById('stat-current');
+                    const statTotal = document.getElementById('stat-total');
+                    const statRed = document.getElementById('stat-red');
+                    const statYellow = document.getElementById('stat-yellow');
+                    const statBlue = document.getElementById('stat-blue');
+                    
+                    if (statCurrent) statCurrent.setAttribute('value', 'Ready to scan');
+                    if (statTotal) statTotal.setAttribute('value', 'Total Area: 0.0 cm2');
+                    if (statRed) statRed.setAttribute('value', '3rd Deg (Red): 0.0 cm2');
+                    if (statYellow) statYellow.setAttribute('value', '2nd Deg (Yel): 0.0 cm2');
+                    if (statBlue) statBlue.setAttribute('value', '1st Deg (Blu): 0.0 cm2');
 
                     if (pen) {
                         const penComp = pen.components['laser-pen-behavior'];
@@ -176,17 +660,48 @@
                             penComp.wasFiring = false;
                             penComp.grabbedBy = null;
                             if (penComp.deactivateLaser) penComp.deactivateLaser();
+                            
                             if (penComp.clearPreviewPoints) penComp.clearPreviewPoints();
-                            if (penComp.hitInstancedMesh) {
-                                penComp.hitInstancedMesh.count = 0;
-                                penComp.hitInstancedMesh.instanceMatrix.needsUpdate = true;
+                            penComp.colorAreas = [0, 0, 0];
+                            penComp.hitCounts = [0, 0, 0];
+                            if (penComp.hitMeshes && penComp.hitMeshes.length > 0) {
+                                penComp.hitMeshes.forEach(mesh => {
+                                    mesh.count = 0;
+                                    mesh.instanceMatrix.needsUpdate = true;
+                                });
                             }
                         }
                         mainScene.object3D.add(pen.object3D);
                         pen.setAttribute('visible', 'false');
                         pen.object3D.visible = false;
-                        pen.setAttribute('position', '1 1.04 -1.5');
+                        pen.setAttribute('position', '1.2 1.04 -1.5');
                         pen.setAttribute('rotation', '-90 0 0');
+                    }
+                    
+                    if (doodlePen) {
+                        const dPenComp = doodlePen.components['doodle-pen-behavior'];
+                        if (dPenComp) {
+                            if (dPenComp.isGrabbedVR) dPenComp.dropVR();
+                            if (dPenComp.isGrabbedDesktop) dPenComp.dropDesktop();
+                        }
+                        mainScene.object3D.add(doodlePen.object3D);
+                        doodlePen.setAttribute('visible', 'false');
+                        doodlePen.object3D.visible = false;
+                        doodlePen.setAttribute('position', '0.8 1.04 -1.5'); 
+                        doodlePen.setAttribute('rotation', '-90 0 0');
+                    }
+
+                    if (eraserTool) {
+                        const eraserComp = eraserTool.components['eraser-behavior'];
+                        if (eraserComp) {
+                            if (eraserComp.isGrabbedVR) eraserComp.dropVR();
+                            if (eraserComp.isGrabbedDesktop) eraserComp.dropDesktop();
+                        }
+                        mainScene.object3D.add(eraserTool.object3D);
+                        eraserTool.setAttribute('visible', 'false');
+                        eraserTool.object3D.visible = false;
+                        eraserTool.setAttribute('position', '0.6 1.04 -1.5'); 
+                        eraserTool.setAttribute('rotation', '-90 0 0');
                     }
 
                     [leftHand, rightHand].forEach(hand => {
@@ -194,10 +709,7 @@
                             const mesh = hand.getObject3D('mesh');
                             if (mesh) mesh.visible = true;
                             const ray = hand.querySelector('.hand-ray');
-                            if (ray) {
-                                ray.setAttribute('raycaster', 'showLine', true);
-                                ray.setAttribute('raycaster', 'enabled', true);
-                            }
+                            if (ray) { ray.setAttribute('raycaster', 'showLine', true); ray.setAttribute('raycaster', 'enabled', true); }
                         }
                     });
                 }
@@ -216,44 +728,55 @@
         <p style="line-height: 1.7; font-size: 16px; margin: 0 0 15px 0;">
            <b>【電腦版操作】</b><br>
            移動：<span style="color: #00FF66; font-weight: bold;">W A S D</span> | 視角：點擊畫面並滑動<br>
-           抓取：對準筆按 <span style="color: #00FF66; font-weight: bold;">E</span><br>
-           測量：拿起後 <span style="color: #00FF66; font-weight: bold;">長按左鍵</span> 框選物體
+           拿測量筆：對準筆按 <span style="color: #00FF66; font-weight: bold;">E</span> | 切換顏色：按 <span style="color: #00FF66; font-weight: bold;">C</span><br>
+           拿塗鴉筆/橡皮擦：對準按 <span style="color: #00FF66; font-weight: bold;">E</span><br>
+           操作：拿起後 <span style="color: #00FF66; font-weight: bold;">長按左鍵</span> 框選物體或畫畫，橡皮擦點擊消除
         </p>
     </div>
 
-    <div id="area-display">塗層表面積:<br><span class="highlight">0 cm²</span></div>
+    <!-- 2D UI 介面 -->
+    <div id="area-display" style="display: none; text-align: left;">
+        <div style="font-size: 0.95em; color: #ddd; margin-bottom: 5px;">
+            本次掃描: <span style="color:#fff;">0.0 cm²</span>
+        </div>
+        <div style="font-size: 1.1em; font-weight: bold; margin-bottom: 8px; border-bottom: 1px solid #555; padding-bottom: 5px;">
+            總表面積: <span style="color:#00ff66;">0.0 cm²</span>
+        </div>
+        <div style="color: #ff4d4d; font-size: 0.9em; margin-bottom: 3px;">■ 3度燒傷 (紅): 0.0 cm²</div>
+        <div style="color: #ffdd44; font-size: 0.9em; margin-bottom: 3px;">■ 2度燒傷 (黃): 0.0 cm²</div>
+        <div style="color: #44aaff; font-size: 0.9em;">■ 1度燒傷 (藍): 0.0 cm²</div>
+    </div>
 
     <div class="custom-vr-btn-container">
         <button id="btn-enter-vr" class="btn-custom btn-vr">進入 VR 模式</button>
         <button id="btn-restart" class="btn-custom btn-restart">重新開始</button>
     </div>
 
-    <a-scene physics="debug: false" webxr="referenceSpaceType: local-floor" renderer="colorManagement: true;">
+    <a-scene physics="debug: false" webxr="referenceSpaceType: local-floor" renderer="colorManagement: true; logarithmicDepthBuffer: true;">
         <a-assets>
             <img id="grid-texture" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI1MTIiIGhlaWdodD0iNTEyIj48cmVjdCB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgZmlsbD0iI0ZGRkZGRiIvPjxwYXRoIGQ9Ik0wIDBoNTEydjUxMkgweiIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjIiLz48cGF0aCBkPSJNMCA1MS4yaDUxMk0wIDEwMi40aDUxMk0wIDE1My42aDUxMk0wIDIwNC44aDUxMk0wIDI1Nmg1MTJNMCAzMDcuMmg1MTJNMCAzNTguNGg1MTJNMCA4MDkuNmg1MTJNMCA0NjAuOGg1MTJNNTEuMiAwdjUxMk0xMDIuNCAwdjUxMk0xNTMuNiAwdjUxMk0yMDQuOCAwdjUxMk0yNTYgMHY1MTJNMzA3LjIgMHY1MTJNMzU4LjQgMHY1MTJNNDA5LjYgMHY1MTJNNDYwLjggMHY1MTIiIHN0cm9rZT0iI0NDQ0NDQyIgc3Ryb2tlLXdpZHRoPSIzIi8+PC9zdmc+">
             <a-asset-item id="pen-model" src="assets/LaserPointer.glb"></a-asset-item>
+            <!-- 確保你有這顆實體橡皮擦的模型 -->
+            <a-asset-item id="eraser-model" src="assets/Eraser.glb"></a-asset-item>
+
             <a-asset-item id="human-body-model" src="assets/human_body.glb"></a-asset-item>
             <a-asset-item id="child-model" src="assets/Child.glb"></a-asset-item>
-            
-            <!-- 🌟 修改：分別載入 Case2 的高面數與低面數版本 -->
             <a-asset-item id="case2-high" src="assets/Case2_High.glb"></a-asset-item>
             <a-asset-item id="case2-low" src="assets/Case2_Low.glb"></a-asset-item>
-            
             <a-asset-item id="case-model" src="assets/Case.glb"></a-asset-item>
-            
             <audio id="bgm" src="assets/music/Background music.mp3" preload="auto" loop="true"></audio>
             <img id="tutorial-img" src="assets/images/tutorial.jpeg">
-            <img id="rounded-board" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MDAiIGhlaWdodD0iMTAwMCI+PHJlY3Qgd2lkdGg9IjgwMCIgaGVpZ2h0PSIxMDAwIiByeD0iNDAiIHJ5PSI0MCIgZmlsbD0iI2ZmZmZmZiIvPjwvc3ZnPg==">
+            <img id="rounded-board" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MDAiIGhlaWdodD0iNTEyIj48cmVjdCB3aWR0aD0iODAwIiBoZWlnaHQ9IjEwMDAiIHJ4PSI0MCIgcnk9IjQwIiBmaWxsPSIjZmZmZmZmIi8+PC9zdmc+">
             <img id="rounded-btn" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MDAiIGhlaWdodD0iMTAwIj48cmVjdCB3aWR0aD0iNDAwIiBoZWlnaHQ9IjEwMCIgcng9IjI1IiByeT0iMjUiIGZpbGw9IiMxMTExMTEiLz48L3N2Zz4=">
         </a-assets>
 
         <a-light id="ambient-light" type="ambient" color="#FFFFFF"></a-light>
-        <a-light type="directional" position="1 2 1" intensity="0.8" castShadow="true"></a-light>
+        <a-light type="directional" position="1 2 1" intensity="0.8" castShadow="true" shadow="bias: -0.0005; normalBias: 0.05; mapSize: 2048"></a-light>
         <a-sky id="environment-sky" color="#E8E8ED"></a-sky>
         <a-entity id="bgm-player" sound="src: #bgm; loop: true; volume: 0.4"></a-entity>
 
-        <a-entity id="lobby-scene" vr-scene-manager>
-            <a-entity id="vr-tutorial-board" position="0 1.6 -2.5">
+        <a-entity vr-scene-manager>
+            <a-entity id="menu-container" lazy-follow="target: #head; distance: 4; heightOffset: -0.2">
                 <a-image src="#rounded-board" width="3.5" height="4.0" position="0 0 0" material="alphaTest: 0.5"></a-image>
                 <a-text value="3D Burn Area Scanner" position="0 1.5 0.01" align="center" width="6.5" color="#111111" font="roboto"></a-text>
                 <a-image src="#tutorial-img" width="2.8" height="1.3" position="0 0.5 0.01"></a-image>
@@ -277,11 +800,8 @@
             <a-entity position="4 0 0" rotation="0 -90 0"><a-entity class="target" gltf-model="#human-body-model" scale="1 1 1" shadow raycast-optimized></a-entity></a-entity>
             <a-entity position="4 0 2" rotation="0 -90 0"><a-entity class="target" gltf-model="#child-model" scale="1 1 1" shadow raycast-optimized></a-entity></a-entity>
             
-            <!-- 🌟 替換：Case2 雙模疊加測試 (位置 Z=4) -->
             <a-entity position="4 0 4" rotation="0 -90 0">
-                <!-- 👁️ 視覺高模：保留精細外觀。不加 target，雷射會直接穿透 -->
-                <a-entity gltf-model="#case2-high" scale="1 1 1" shadow></a-entity>
-                <!-- 🎯 碰撞低模：負責雷射碰撞。加上 target 與 invisible-collider 隱形組件 -->
+                <a-entity gltf-model="#case2-high" scale="1 1 1" shadow="cast: true; receive: false"></a-entity>
                 <a-entity class="target" gltf-model="#case2-low" scale="1 1 1" raycast-optimized invisible-collider></a-entity>
             </a-entity>
             
@@ -290,23 +810,85 @@
             <a-dodecahedron class="target" position="-2.5 1.3 -1.5" radius="0.4" color="#FFD700" shadow static-body></a-dodecahedron>
             <a-cylinder class="target" position="-1.7 1.3 -1.5" radius="0.3" height="0.6" color="#FF6347" shadow static-body></a-cylinder>
 
-            <a-entity position="0 2 -2.5" rotation="0 0 0">
-                <a-plane width="2" height="0.6" color="#111" material="opacity: 0.9; transparent: true"></a-plane>
-                <a-text id="billboard-text" value="Ready to scan" align="center" width="5" position="0 0 0.01" color="#ffffff"></a-text>
+            <!-- 狀態與數據看板 -->
+            <a-entity position="0 2.9 -2.5" rotation="0 0 0">
+                <a-entity position="0 0.8 0">
+                    <a-plane width="2" height="0.4" color="#111" material="opacity: 0.9; transparent: true"></a-plane>
+                    <a-text id="billboard-text" value="Ready to scan" align="center" width="4.5" position="0 0 0.01" color="#ffffff"></a-text>
+                </a-entity>
+
+                <a-entity position="0 0 0">
+                    <a-plane width="2" height="1.1" color="#222" material="opacity: 0.9; transparent: true"></a-plane>
+                    <a-text value="- Burn Area Stats -" align="center" width="3.5" position="0 0.45 0.01" color="#aaaaaa"></a-text>
+                    <a-text id="stat-current" value="Ready to scan" align="center" width="3.2" position="0 0.25 0.01" color="#ffffff"></a-text>
+                    <a-text id="stat-total" value="Total Area: 0.0 cm2" align="center" width="3.5" position="0 0.05 0.01" color="#00ff66"></a-text>
+                    <a-text id="stat-red" value="3rd Deg (Red): 0.0 cm2" align="center" width="2.6" position="0 -0.15 0.01" color="#ff4d4d"></a-text>
+                    <a-text id="stat-yellow" value="2nd Deg (Yel): 0.0 cm2" align="center" width="2.6" position="0 -0.30 0.01" color="#ffdd44"></a-text>
+                    <a-text id="stat-blue" value="1st Deg (Blu): 0.0 cm2" align="center" width="2.6" position="0 -0.45 0.01" color="#44aaff"></a-text>
+                </a-entity>
+
+                <a-entity position="0 -1.2 0">
+                    <a-plane width="2" height="1.1" color="#222" material="opacity: 0.9; transparent: true"></a-plane>
+                    <a-text value="Dot Size (cm)" position="-0.8 0.35 0.01" align="left" width="2.8" color="#aaa"></a-text>
+                    <a-entity class="interactable" position="0.2 0.35 0.01" geometry="primitive: plane; width: 0.2; height: 0.2" material="color: #444" ui-slider-btn="target: dot-size-val; action: decrease; min: 0.2; max: 3.0; step: 0.1">
+                        <a-text value="-" align="center" position="0 0 0.01" color="#fff" width="4"></a-text>
+                    </a-entity>
+                    <a-text id="dot-size-val" value="1.0" align="center" position="0.5 0.35 0.01" width="3.5" color="#00ff66"></a-text>
+                    <a-entity class="interactable" position="0.8 0.35 0.01" geometry="primitive: plane; width: 0.2; height: 0.2" material="color: #444" ui-slider-btn="target: dot-size-val; action: increase; min: 0.2; max: 3.0; step: 0.1">
+                        <a-text value="+" align="center" position="0 0 0.01" color="#fff" width="4"></a-text>
+                    </a-entity>
+
+                    <a-text value="Spacing (cm)" position="-0.8 0.0 0.01" align="left" width="2.8" color="#aaa"></a-text>
+                    <a-entity class="interactable" position="0.2 0.0 0.01" geometry="primitive: plane; width: 0.2; height: 0.2" material="color: #444" ui-slider-btn="target: spacing-val; action: decrease; min: 0.5; max: 5.0; step: 0.1">
+                        <a-text value="-" align="center" position="0 0 0.01" color="#fff" width="4"></a-text>
+                    </a-entity>
+                    <a-text id="spacing-val" value="1.5" align="center" position="0.5 0.0 0.01" width="3.5" color="#00ff66"></a-text>
+                    <a-entity class="interactable" position="0.8 0.0 0.01" geometry="primitive: plane; width: 0.2; height: 0.2" material="color: #444" ui-slider-btn="target: spacing-val; action: increase; min: 0.5; max: 5.0; step: 0.1">
+                        <a-text value="+" align="center" position="0 0 0.01" color="#fff" width="4"></a-text>
+                    </a-entity>
+                    
+                    <a-entity class="interactable" position="0 -0.35 0.01" geometry="primitive: plane; width: 0.6; height: 0.2" material="color: #444" ui-reset-btn onclick="document.getElementById('dot-size-val').setAttribute('value', '1.0'); document.getElementById('spacing-val').setAttribute('value', '1.5');">
+                        <a-text value="RESET" align="center" position="0 0 0.01" color="#fff" width="3"></a-text>
+                    </a-entity>
+                </a-entity>
             </a-entity>
 
+            <!-- 1. 測量雷射筆 (放在右邊平躺) -->
             <a-entity id="laser-pen" class="interactable" visible="false"
-                position="1 1.04 -1.5" rotation="-90 0 0"
+                position="1.2 1.04 -1.5" rotation="-90 0 0"
                 geometry="primitive: box; width: 0.08; height: 0.35; depth: 0.08"
                 material="opacity: 0; transparent: true; depthWrite: false"
                 dynamic-body="shape: box; mass: 0.5; linearDamping: 0.8; angularDamping: 0.8"
                 laser-pen-behavior>
                 <a-entity gltf-model="#pen-model" scale="1 1 1" position="0 0 0" rotation="90 0 0"></a-entity>
             </a-entity>
+
+            <!-- 🌟 2. 塗鴉畫筆 (外觀用同事的綠色特效版，內核換成我們的單條線畫法) -->
+            <a-entity id="doodle-pen" class="interactable" visible="false"
+                position="0.8 1.04 -1.5" rotation="-90 0 0"
+                geometry="primitive: box; width: 0.08; height: 0.35; depth: 0.08"
+                material="opacity: 0; transparent: true; depthWrite: false"
+                dynamic-body="shape: box; mass: 0.5; linearDamping: 0.8; angularDamping: 0.8"
+                doodle-pen-behavior>
+                <!-- 沿用同事設定：筆身 + 綠色光環 -->
+                <a-entity gltf-model="#pen-model" scale="1 1 1" position="0 0 0" rotation="90 0 0"></a-entity>
+                <a-cylinder position="0 -0.05 0" radius="0.025" height="0.1" material="color: #00FF00; emissive: #00FF00; emissiveIntensity: 0.6"></a-cylinder>
+            </a-entity>
+
+            <!-- 🌟 3. 實體橡皮擦 (放在最左邊) -->
+            <a-entity id="eraser-tool" class="interactable" visible="false"
+                position="0.6 1.04 -1.5" rotation="-90 0 0"
+                geometry="primitive: box; width: 0.1; height: 0.2; depth: 0.08"
+                material="opacity: 0; transparent: true; depthWrite: false"
+                dynamic-body="shape: box; mass: 0.5; linearDamping: 0.8; angularDamping: 0.8"
+                eraser-behavior>
+                <a-entity gltf-model="#eraser-model" scale="1 1 1" position="0 0 0" rotation="90 0 0"></a-entity>
+            </a-entity>
+
         </a-entity>
 
         <a-entity id="rig" position="0 0 0" hybrid-locomotion>
-            <a-camera id="head" position="0 1.6 0" look-controls="pointerLockEnabled: true" wasd-controls="enabled: false">
+            <a-camera id="head" position="0 1.6 0" look-controls="pointerLockEnabled: true" wasd-controls="enabled: false" near="0.02">
                 <a-entity id="desktop-cursor" cursor="fuse: false; rayOrigin: entity;" position="0 0 -1" geometry="primitive: ring; radiusInner: 0.015; radiusOuter: 0.025" material="color: white; shader: flat; opacity: 0.5" raycaster="objects: .interactable"></a-entity>
                 <a-text id="hud-loading-text" value="" position="0 0 -0.5" align="center" width="0.8" color="#000000" opacity="0.9"></a-text>
             </a-camera>
