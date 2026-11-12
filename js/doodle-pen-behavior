@@ -1,0 +1,200 @@
+AFRAME.registerComponent('doodle-pen-behavior', {
+    init: function () {
+        this.isGrabbedVR = false;
+        this.isGrabbedDesktop = false;
+        this.isHovered = false;
+        this.isDrawing = false;
+        this.grabbedBy = null;
+        
+        // 綁定事件
+        this.onHoverEnter = this.onHoverEnter.bind(this);
+        this.onHoverLeave = this.onHoverLeave.bind(this);
+        this.onKeyDown = this.onKeyDown.bind(this);
+        this.onMouseDown = this.onMouseDown.bind(this);
+        this.onMouseUp = this.onMouseUp.bind(this);
+        
+        this.onVRGripDown = this.onVRGripDown.bind(this);
+        this.onVRGripUp = this.onVRGripUp.bind(this);
+        this.onVRTriggerDown = this.onVRTriggerDown.bind(this);
+        this.onVRTriggerUp = this.onVRTriggerUp.bind(this);
+        
+        this.el.addEventListener('mouseenter', this.onHoverEnter);
+        this.el.addEventListener('mouseleave', this.onHoverLeave);
+        
+        window.addEventListener('keydown', this.onKeyDown);
+        window.addEventListener('mousedown', this.onMouseDown);
+        window.addEventListener('mouseup', this.onMouseUp);
+
+        // 紀錄原始位置
+        const pos = this.el.getAttribute('position');
+        const rot = this.el.getAttribute('rotation');
+        this.originalPosition = { x: pos.x, y: pos.y, z: pos.z };
+        this.originalRotation = { x: rot.x, y: rot.y, z: rot.z };
+        
+        // 🌟 塗鴉筆尖端 (加上一顆綠色小發光球做區別)
+        this.tip = document.createElement('a-entity');
+        this.tip.setAttribute('position', '0 0 -0.15'); // 根據雷射筆模型長度調整
+        this.tip.setAttribute('geometry', 'primitive: sphere; radius: 0.012');
+        this.tip.setAttribute('material', 'color: #00FF00; emissive: #00FF00; emissiveIntensity: 0.8; depthWrite: false');
+        this.el.appendChild(this.tip);
+
+        const bindHandEvents = () => {
+            const leftHand = document.querySelector('#left-hand');
+            const rightHand = document.querySelector('#right-hand');
+            
+            if(leftHand) {
+                leftHand.addEventListener('gripdown', (e) => this.onVRGripDown(e, leftHand));
+                leftHand.addEventListener('gripup', (e) => this.onVRGripUp(e, leftHand));
+                leftHand.addEventListener('triggerdown', (e) => this.onVRTriggerDown(e, leftHand));
+                leftHand.addEventListener('triggerup', (e) => this.onVRTriggerUp(e, leftHand));
+                // 🌟 用 X 或 Y 鍵來清除筆跡
+                leftHand.addEventListener('xbuttondown', () => this.clearDrawing());
+                leftHand.addEventListener('ybuttondown', () => this.clearDrawing());
+            }
+            if(rightHand) {
+                rightHand.addEventListener('gripdown', (e) => this.onVRGripDown(e, rightHand));
+                rightHand.addEventListener('gripup', (e) => this.onVRGripUp(e, rightHand));
+                rightHand.addEventListener('triggerdown', (e) => this.onVRTriggerDown(e, rightHand));
+                rightHand.addEventListener('triggerup', (e) => this.onVRTriggerUp(e, rightHand));
+                // 🌟 用 A 或 B 鍵來清除筆跡
+                rightHand.addEventListener('abuttondown', () => this.clearDrawing());
+                rightHand.addEventListener('bbuttondown', () => this.clearDrawing());
+            }
+        };
+
+        if (document.readyState === 'complete') bindHandEvents();
+        else window.addEventListener('load', bindHandEvents);
+
+        // 🌟 建立 3D 筆跡的 InstancedMesh (高效能空繪)
+        this.el.sceneEl.addEventListener('loaded', () => {
+            this.dummy = new THREE.Object3D();
+            this.lastPoint = new THREE.Vector3();
+            
+            const maxInk = 40000;
+            const inkGeo = new THREE.SphereGeometry(0.008, 8, 8); // 筆跡粗細
+            const inkMat = new THREE.MeshBasicMaterial({ color: 0x00FF00 }); // 螢光綠
+            
+            this.inkMesh = new THREE.InstancedMesh(inkGeo, inkMat, maxInk);
+            this.inkMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+            this.inkMesh.frustumCulled = false;
+            this.inkMesh.count = 0;
+            
+            this.el.sceneEl.object3D.add(this.inkMesh);
+            this.hasLoaded = true;
+        });
+    },
+
+    clearDrawing: function() {
+        if (!this.isGrabbedVR && !this.isGrabbedDesktop) return;
+        if (this.inkMesh) {
+            this.inkMesh.count = 0;
+            this.inkMesh.instanceMatrix.needsUpdate = true;
+            
+            // 震動回饋
+            if (this.grabbedBy) {
+                const gamepad = this.grabbedBy.components['tracked-controls']?.controller;
+                if (gamepad && gamepad.hapticActuators && gamepad.hapticActuators.length > 0) {
+                    gamepad.hapticActuators[0].pulse(1.0, 150);
+                }
+            }
+        }
+    },
+
+    // VR 抓取與畫圖邏輯
+    onVRGripDown: function(evt, hand) { if (!this.isGrabbedVR && !this.isGrabbedDesktop && this.isHovered) this.pickupVR(hand); },
+    onVRGripUp: function(evt, hand) { if (this.isGrabbedVR && this.grabbedBy === hand) this.dropVR(); },
+    onVRTriggerDown: function(evt, hand) { 
+        if(this.isGrabbedVR && this.grabbedBy === hand) this.isDrawing = true; 
+    },
+    onVRTriggerUp: function(evt, hand) { 
+        if(this.isGrabbedVR && this.grabbedBy === hand) this.isDrawing = false; 
+    },
+
+    pickupVR: function(hand) {
+        this.isGrabbedVR = true; this.grabbedBy = hand; this.isHovered = false;
+        this.el.removeAttribute('dynamic-body');
+        this.el.setAttribute('position', '0 0.02 -0.06'); 
+        this.el.setAttribute('rotation', '-135 0 0'); 
+        hand.object3D.add(this.el.object3D);
+        
+        const handMesh = hand.getObject3D('mesh');
+        if (handMesh) handMesh.visible = false;
+        const handRay = hand.querySelector('.hand-ray');
+        if (handRay) {
+            handRay.setAttribute('raycaster', 'showLine', false);
+            handRay.setAttribute('raycaster', 'enabled', false);
+        }
+    },
+
+    dropVR: function() {
+        if (this.grabbedBy) {
+            const handMesh = this.grabbedBy.getObject3D('mesh');
+            if (handMesh) handMesh.visible = true;
+            const handRay = this.grabbedBy.querySelector('.hand-ray');
+            if (handRay) {
+                handRay.setAttribute('raycaster', 'showLine', true);
+                handRay.setAttribute('raycaster', 'enabled', true);
+            }
+        }
+        this.isGrabbedVR = false; this.isDrawing = false; this.grabbedBy = null;
+        this.el.sceneEl.object3D.add(this.el.object3D);
+        this.el.setAttribute('position', this.originalPosition);
+        this.el.setAttribute('rotation', this.originalRotation); 
+        this.el.setAttribute('dynamic-body', 'shape: box; mass: 0.5; linearDamping: 0.8; angularDamping: 0.8');
+    },
+
+    // PC 抓取邏輯
+    onHoverEnter: function () { if (this.isGrabbedDesktop || this.isGrabbedVR) return; this.isHovered = true; },
+    onHoverLeave: function () { this.isHovered = false; },
+    onKeyDown: function (e) {
+        if (e.key.toLowerCase() === 'e') {
+            if (!this.isGrabbedDesktop && this.isHovered && !this.isGrabbedVR) this.pickupDesktop();
+            else if (this.isGrabbedDesktop) this.dropDesktop();
+        }
+        // PC 版按 R 清除
+        if (e.key.toLowerCase() === 'r' && this.isGrabbedDesktop) this.clearDrawing();
+    },
+    onMouseDown: function (e) { if (e.button === 0 && this.isGrabbedDesktop) this.isDrawing = true; },
+    onMouseUp: function (e) { if (e.button === 0 && this.isGrabbedDesktop) this.isDrawing = false; },
+
+    pickupDesktop: function () {
+        this.isGrabbedDesktop = true; this.isHovered = false;
+        this.el.removeAttribute('dynamic-body');
+    },
+    dropDesktop: function () {
+        this.isGrabbedDesktop = false; this.isDrawing = false;
+        this.el.setAttribute('position', this.originalPosition);
+        this.el.setAttribute('rotation', this.originalRotation); 
+        this.el.setAttribute('dynamic-body', 'shape: box; mass: 0.5; linearDamping: 0.8; angularDamping: 0.8');
+    },
+
+    tick: function () {
+        if (this.isGrabbedDesktop) {
+            const camera = document.querySelector('a-camera');
+            const cam3D = camera.object3D;
+            const offset = new THREE.Vector3(0.3, -0.3, -0.5);
+            offset.applyMatrix4(cam3D.matrixWorld);
+            this.el.object3D.position.copy(offset);
+            this.el.object3D.quaternion.copy(cam3D.quaternion);
+            this.el.object3D.rotateX(-Math.PI / 2); 
+        }
+
+        // 🌟 持續生出立體墨水點
+        if (this.hasLoaded && this.isDrawing && this.inkMesh) {
+            const tipWorldPos = new THREE.Vector3();
+            this.tip.object3D.getWorldPosition(tipWorldPos);
+
+            if (this.inkMesh.count < 40000) {
+                // 距離大於 0.005 才畫下一個點，避免原地生太多點浪費效能
+                if (this.inkMesh.count === 0 || tipWorldPos.distanceTo(this.lastPoint) > 0.005) {
+                    this.dummy.position.copy(tipWorldPos);
+                    this.dummy.updateMatrix();
+                    this.inkMesh.setMatrixAt(this.inkMesh.count, this.dummy.matrix);
+                    this.inkMesh.instanceMatrix.needsUpdate = true;
+                    this.inkMesh.count++;
+                    this.lastPoint.copy(tipWorldPos);
+                }
+            }
+        }
+    }
+});
